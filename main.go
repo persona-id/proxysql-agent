@@ -1,94 +1,77 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/proxysql"
-	"github.com/rs/zerolog"
+	"github.com/spf13/viper"
 )
 
 var (
-	logger            zerolog.Logger
-	psql              *proxysql.ProxySQL
-	coreModeFlag      bool
-	satelliteModeFlag bool
-	userFlag          string
-	passwordFlag      string
-	addressFlag       string
-	pauseFlag         int
+	logger *slog.Logger
+	psql   *proxysql.ProxySQL
 )
 
-// TODO: support either a config file, env vars, or commandline options
 func main() {
+	Configure()
+
 	setupLogger()
 
-	userEnv := os.Getenv("PROXYSQL_USER")
-	passwordEnv := os.Getenv("PROXYSQL_PASSWORD")
-	addressEnv := os.Getenv("PROXYSQL_ADDRESS")
+	logger.Info("dump", slog.Any("dump", Config))
 
-	// If environment variables are not set, use command line arguments
-	flag.StringVar(&userFlag, "user", userEnv, "ProxySQL username")
-	flag.StringVar(&passwordFlag, "password", passwordEnv, "ProxySQL password")
-	flag.StringVar(&addressFlag, "address", addressEnv, "ProxySQL address")
-
-	flag.IntVar(&pauseFlag, "pause", 0, "Seconds to pause before attempting to start")
-
-	flag.BoolVar(&coreModeFlag, "core", false, "Run the functions required for core pods")
-	flag.BoolVar(&satelliteModeFlag, "satellite", false, "Run the functions required for satellite pods")
-
-	flag.Parse()
-
-	// If command line arguments are not set, use default values
-	if userFlag == "" {
-		userFlag = "radmin"
-	}
-	if passwordFlag == "" {
-		passwordFlag = "radmin"
-	}
-	if addressFlag == "" {
-		addressFlag = "127.0.0.1:6032"
+	// if defined, pause before booting; this allows the proxysql pods to fully come up before connecting
+	if Config.StartDelay > 0 {
+		logger.Info("Pausing before boot", slog.Int("seconds", Config.StartDelay))
+		time.Sleep(time.Duration(Config.StartDelay) * time.Second)
 	}
 
-	logger.Debug().
-		Str("address", addressFlag).
-		Str("username", userFlag).
-		Str("password", "************").
-		Msg("ProxySQL configuration")
-
-	if pauseFlag > 0 {
-		logger.Info().Int("seconds", pauseFlag).Msg("Pausing before boot")
-		time.Sleep(time.Duration(pauseFlag) * time.Second)
+	// open a connection to proxysql
+	var err error
+	psql, err = proxysql.New()
+	if err != nil {
+		logger.Error("Unable to connect to ProxySQL", slog.Any("error", err))
+		panic(err)
 	}
 
-	setupProxySQL()
-
-	if coreModeFlag {
-		go psql.Core()
-	} else if satelliteModeFlag {
-		go psql.Satellite()
-	}
-
-	for {
-		// just loop, i guess. maybe select {} is the right choice here?
+	// run the process in either core or satellite mode; each of these is a for {} loop,
+	// so it will block the process from exiting
+	mode := viper.GetViper().GetString("run_mode")
+	if mode == "core" {
+		psql.Core()
+	} else if mode == "satellite" {
+		psql.Satellite()
 	}
 }
 
 func setupLogger() {
-	logger = zerolog.New(
-		zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
-	).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
-}
+	var level slog.Level
 
-func setupProxySQL() {
-	var err error
-
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/", userFlag, passwordFlag, addressFlag)
-
-	psql, err = proxysql.New(dsn)
-	if err != nil {
-		logger.Error().Err(err).Msg("Unable to connect to ProxySQL")
+	switch viper.GetViper().GetString("log_level") {
+	case "DEBUG":
+		level = slog.LevelDebug
+	case "INFO":
+		level = slog.LevelInfo
+	case "WARN":
+		level = slog.LevelWarn
+	case "ERROR":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
 	}
+
+	opts := &slog.HandlerOptions{
+		AddSource: false,
+		Level:     level,
+	}
+
+	var handler slog.Handler = slog.NewTextHandler(os.Stdout, opts)
+	// if appEnv == "production" {
+	//     handler = slog.NewJSONHandler(os.Stdout, opts)
+	// }
+
+	logger = slog.New(handler)
+
+	slog.SetDefault(logger)
 }

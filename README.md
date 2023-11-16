@@ -49,7 +49,8 @@ There are some linear tickets, but here's a high level overview of what I have i
 Libraries in use:
 
 * [k8s-client-go](https://github.com/kubernetes/client-go) - Golang k8s client
-* [Zerolog](https://github.com/rs/zerolog) - Zero allocation JSON logger
+* [slog](https://pkg.go.dev/log/slog) ([examples](https://betterstack.com/community/guides/logging/logging-in-go/)) - log/slog
+* [Viper](https://pkg.go.dev/github.com/spf13/viper) - Go configuration library; allows config from a file, ENV, or commandline flags
 
 Misc:
 

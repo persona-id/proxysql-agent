@@ -2,24 +2,35 @@ package proxysql
 
 import (
 	"database/sql"
+	"fmt"
+	"log/slog"
 	"os"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/rs/zerolog"
+	"github.com/spf13/viper"
 )
 
 type ProxySQL struct {
 	dsn    string
 	conn   *sql.DB
-	logger zerolog.Logger
+	logger *slog.Logger
 }
 
-func New(dsn string) (*ProxySQL, error) {
-	// FIXME: this should probably be JSON
-	logger := zerolog.New(
-		zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339},
-	).Level(zerolog.TraceLevel).With().Timestamp().Caller().Logger()
+func New() (*ProxySQL, error) {
+	opts := &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelDebug,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+
+	slog.SetDefault(logger)
+
+	address := viper.GetViper().GetString("proxysql.address")
+	username := viper.GetViper().GetString("proxysql.username")
+	password := viper.GetViper().GetString("proxysql.password")
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/", username, password, address)
 
 	conn, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -31,8 +42,7 @@ func New(dsn string) (*ProxySQL, error) {
 		return nil, err
 	}
 
-	// FIXME: dont log full dsn, it has passwords in it
-	logger.Info().Str("Host", dsn).Msg("Connected to ProxySQL admin")
+	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
 	return &ProxySQL{dsn, conn, logger}, nil
 }

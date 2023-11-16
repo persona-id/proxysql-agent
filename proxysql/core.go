@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/spf13/viper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -21,18 +23,21 @@ type PodInfo struct {
 
 // Core is the main function for ProxySQL core operations.
 func (p *ProxySQL) Core() {
-	p.logger.Info().Msg("Core mode initialized; looping every 10s")
+	interval := viper.GetViper().GetInt("core.interval")
+
+	p.logger.Info("Core mode initialized, running loop", slog.Int("interval (s)", interval))
 
 	for {
 		p.coreLoop()
-		time.Sleep(10 * time.Second)
+
+		time.Sleep(time.Duration(interval) * time.Second)
 	}
 }
 
 func (p *ProxySQL) coreLoop() {
 	pods, err := GetCorePods()
 	if err != nil {
-		p.logger.Error().Err(err).Msg("Failed to get pod info")
+		p.logger.Error("Failed to get pod info", slog.Any("error", err))
 		return
 	}
 
@@ -51,7 +56,7 @@ func (p *ProxySQL) coreLoop() {
 		command := "LOAD PROXYSQL SERVERS TO RUNTIME"
 		_, err = p.conn.Exec(command)
 		if err != nil {
-			p.logger.Error().Err(err).Str("command", command).Msg("command failed")
+			p.logger.Error("Command failed to execute", slog.String("command", command), slog.Any("error", err))
 		}
 		return
 	}
@@ -60,22 +65,22 @@ func (p *ProxySQL) coreLoop() {
 	for _, command := range commands {
 		_, err = p.conn.Exec(command)
 		if err != nil {
-			p.logger.Error().Err(err).Str("commands", command).Msg("command failed")
+			p.logger.Error("Commands failed", slog.String("commands", command), slog.Any("error", err))
 		}
 	}
 
 	// Write the new checksum to the file for the next run
 	err = ioutil.WriteFile(checksumFile, []byte(digest), 0644)
 	if err != nil {
-		p.logger.Error().Err(err).Str("file", checksumFile).Msg("Failed to write to checksum file")
+		p.logger.Error("Failed to write to checksum file", slog.String("file", checksumFile), slog.Any("error", err))
 	}
 
-	p.logger.Debug().Str("commands", strings.Join(commands, "; ")).Send()
+	p.logger.Info("Commands ran", slog.String("commands", strings.Join(commands, "; ")))
 }
 
 func GetCorePods() ([]PodInfo, error) {
-	// FIXME: make this, and labels, configurable
-	app := "proxysql"
+	app := viper.GetViper().GetString("core.pod_selector.app")
+	component := viper.GetViper().GetString("core.pod_selector.component")
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -88,7 +93,7 @@ func GetCorePods() ([]PodInfo, error) {
 	}
 
 	pods, _ := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s,component=core", app),
+		LabelSelector: fmt.Sprintf("app=%s,component=%s", app, component),
 	})
 
 	var corePods []PodInfo
@@ -120,6 +125,7 @@ func createCommands(pods []PodInfo) []string {
 
 	commands = append(commands,
 		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
 		"LOAD MYSQL SERVERS TO RUNTIME",
 		"LOAD MYSQL USERS TO RUNTIME",
