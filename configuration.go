@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log/slog"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -44,7 +45,7 @@ var Config config
 //  2. config file
 //  3. ENV variables
 //  4. commandline flags
-func Configure() {
+func Configure() error {
 	// set up some ENV settings
 	// the replacer lets us access nested configs, like PROXYSQL_ADDRESS will equate to proxysql.address
 	replacer := strings.NewReplacer(".", "_")
@@ -53,7 +54,7 @@ func Configure() {
 	viper.GetViper().AutomaticEnv()
 
 	// set some defaults
-	viper.GetViper().SetDefault("start_delay", 1)
+	viper.GetViper().SetDefault("start_delay", 0)
 	viper.GetViper().SetDefault("log_level", "INFO")
 	viper.GetViper().SetDefault("run_mode", nil)
 
@@ -72,31 +73,18 @@ func Configure() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("/etc/proxysql-agent")
-	viper.AddConfigPath("$HOME/.config/proxysql-agent")
 	viper.AddConfigPath(".")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			// Config file not found; ignore error and move on
 		} else {
-			slog.Error(
-				"Error loading config file",
-				slog.String("config_file", viper.GetViper().ConfigFileUsed()),
-				slog.Any("err", err),
-			)
+			return err
 		}
 	}
 
-	file := viper.GetViper().ConfigFileUsed()
-	if file != "" {
-		slog.Debug(
-			"Loaded configuration from file",
-			slog.String("config_file", file),
-		)
-	}
-
 	// commandline flags
-	pflag.Int("start_delay", 1, "seconds to pause before starting agent")
+	pflag.Int("start_delay", 0, "seconds to pause before starting agent")
 	pflag.String("log_level", "INFO", "the log level for the agent; defaults to INFO")
 	pflag.String("run_mode", "", "mode to run the agent in; valid values: [core OR satellite]")
 
@@ -110,41 +98,42 @@ func Configure() {
 
 	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop")
 
+	pflag.Bool("show-config", false, "Dump the configuration for debugging")
+	pflag.CommandLine.MarkHidden("show-config")
+
 	pflag.Parse()
 	viper.BindPFlags(pflag.CommandLine)
 
-	slog.Debug("Settings", slog.Any("settings map", viper.GetViper().AllSettings()))
+	// we are only dumping the config if the secret flag show-config is specified, because the config
+	// contains the proxysql admin password
+	if viper.GetViper().GetBool("show-config") {
+		fmt.Println("settings", viper.GetViper().AllSettings())
+	}
 
 	// run some validations before proceeding
 	if viper.GetViper().IsSet("run_mode") {
 		run_mode := viper.GetViper().GetString("run_mode")
 		if run_mode != "core" && run_mode != "satellite" {
-			msg := "run_mode must be either 'core' or 'satellite'"
-			slog.Error(msg, slog.String("run_mode", run_mode))
-			panic(msg)
+			return errors.New("run_mode must be either 'core' or 'satellite'")
 		}
 	}
 
 	if delay := viper.GetViper().GetInt("start_delay"); delay < 0 {
-		msg := "start_delay cannot be less < 0"
-		slog.Error(msg)
-		panic(msg)
+		return errors.New("start_delay cannot be less < 0")
 	}
 
 	if cinterval := viper.GetViper().GetInt("core.interval"); cinterval < 0 {
-		msg := "core.interval cannot be less < 0"
-		slog.Error(msg, slog.Int("core.interval", cinterval))
-		panic(msg)
+		return errors.New("core.interval cannot be less < 0")
 	}
 
 	if sinterval := viper.GetViper().GetInt("satellite.interval"); sinterval < 0 {
-		msg := "satellite.interval cannot be less < 0"
-		slog.Error(msg, slog.Int("start_delay", sinterval))
-		panic(msg)
+		return errors.New("satellite.interval cannot be less < 0")
 	}
 
 	err := viper.Unmarshal(&Config)
 	if err != nil {
-		slog.Error("Unable to unmarshal onto config struct", slog.Any("error", err))
+		return err
 	}
+
+	return nil
 }

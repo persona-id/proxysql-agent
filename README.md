@@ -34,15 +34,13 @@ There are some linear tickets, but here's a high level overview of what I have i
 
 - *P1* - Health checks; replace the ruby health probe with this
 - *P1* - Replace the pre-stop ruby script with this
-- *P1* - Slim down the docker container, it doesn't need to be full-on debian; use multistage builds (probably)
 - *P2* - Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format TBD
 - *P2* - HTTP API for controlling the agent. Much to do here, many ideas
   - health checks
   - get proxysql admin status
   - force a satellite resync (if running in satellite mode)
   - etc
-- *P3* - Leader election; elect one core pod and have it pod be responsible for managing cluster state
-- *P3* - Address all the random `FIXME`/`TODO` comments littered around the code
+- *P3* - Leader election; elect one core pod and have it be responsible for managing cluster state
 
 ### See also
 

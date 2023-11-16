@@ -1,15 +1,44 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.21.3-bookworm
+# Stage 1
+FROM golang:1.21.4-alpine AS builder
+
+ARG BUILD_SHA
+ARG BUILD_TIME
+ARG VERSION
+
+ENV GO111MODULE=on
 
 # Set destination for COPY
-WORKDIR /app
+WORKDIR /build
 
-COPY . .
+COPY go.sum go.mod .
+
 RUN go mod download
 
-# Build
-RUN CGO_ENABLED=0 GOOS=linux go build -o /proxysql-agent
+COPY . .
 
-# Run
-CMD ["/proxysql-agent"]
+RUN apk update  && apk add --no-cache git && rm -rf /var/cache/apk/*
+
+RUN CGO_ENABLED="0" \
+    GOOS="linux" \
+    GOARCH="amd64" \
+    go build -ldflags "-s -w -X 'main.Version=${VERSION}' -X 'main.Build=${BUILD_SHA}' -X 'main.BuildTime=${BUILD_TIME}'" -o proxysql-agent .
+
+# Stage 2
+FROM alpine:3.18.4 as runner
+
+RUN apk update \
+    && apk add --no-cache bash bind-tools \
+    && rm -rf /var/cache/apk/* \
+    && addgroup agent \
+    && adduser -S agent -u 1000 -G agent
+
+WORKDIR /app
+
+COPY --chown=agent:agent --from=builder --chmod=700 /build/proxysql-agent /app/
+COPY --chown=agent:agent --from=builder --chmod=600 /build/config.yaml /app/
+
+USER agent
+
+ENTRYPOINT ["/proxysql-agent"]

@@ -6,12 +6,22 @@ import (
 	"time"
 )
 
+var (
+	// compile time info
+	Build = ""
+	BuildTime = ""
+	Version = ""
+)
+
 func main() {
-	Configure()
+	err := Configure()
+	if err != nil {
+		panic(err)
+	}
 
 	setupLogger()
 
-	slog.Info("configured values", slog.Any("config", Config))
+	slog.Info("build info", slog.Any("version", Version), slog.Any("time", BuildTime), slog.Any("build", Build))
 
 	// if defined, pause before booting; this allows the proxysql pods to fully come up before connecting
 	if Config.StartDelay > 0 {
@@ -21,7 +31,7 @@ func main() {
 
 	// open a connection to proxysql
 	var psql *ProxySQL
-	psql, err := psql.New()
+	psql, err = psql.New()
 	if err != nil {
 		slog.Error("Unable to connect to ProxySQL", slog.Any("error", err))
 		panic(err)
