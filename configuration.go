@@ -19,6 +19,8 @@ type config struct {
 		Password string `mapstructure:"password"`
 	} `mapstructure:"proxysql"`
 
+	RunMode string `mapstructure:"run_mode"`
+
 	Core struct {
 		Interval     int    `mapstructure:"interval"`
 		ChecksumFile string `mapstructure:"checksum_file"`
@@ -43,8 +45,6 @@ var Config config
 //  3. ENV variables
 //  4. commandline flags
 func Configure() {
-	setupLogger()
-
 	// set up some ENV settings
 	// the replacer lets us access nested configs, like PROXYSQL_ADDRESS will equate to proxysql.address
 	replacer := strings.NewReplacer(".", "_")
@@ -113,38 +113,38 @@ func Configure() {
 	pflag.Parse()
 	viper.BindPFlags(pflag.CommandLine)
 
-	logger.Debug("Settings", slog.Any("settings map", viper.GetViper().AllSettings()))
+	slog.Debug("Settings", slog.Any("settings map", viper.GetViper().AllSettings()))
 
 	// run some validations before proceeding
 	if viper.GetViper().IsSet("run_mode") {
 		run_mode := viper.GetViper().GetString("run_mode")
 		if run_mode != "core" && run_mode != "satellite" {
 			msg := "run_mode must be either 'core' or 'satellite'"
-			logger.Error(msg, slog.String("run_mode", run_mode))
+			slog.Error(msg, slog.String("run_mode", run_mode))
 			panic(msg)
 		}
 	}
 
 	if delay := viper.GetViper().GetInt("start_delay"); delay < 0 {
 		msg := "start_delay cannot be less < 0"
-		logger.Error(msg)
+		slog.Error(msg)
 		panic(msg)
 	}
 
 	if cinterval := viper.GetViper().GetInt("core.interval"); cinterval < 0 {
 		msg := "core.interval cannot be less < 0"
-		logger.Error(msg, slog.Int("core.interval", cinterval))
+		slog.Error(msg, slog.Int("core.interval", cinterval))
 		panic(msg)
 	}
 
 	if sinterval := viper.GetViper().GetInt("satellite.interval"); sinterval < 0 {
 		msg := "satellite.interval cannot be less < 0"
-		logger.Error(msg, slog.Int("start_delay", sinterval))
+		slog.Error(msg, slog.Int("start_delay", sinterval))
 		panic(msg)
 	}
 
 	err := viper.Unmarshal(&Config)
 	if err != nil {
-		logger.Error("Unable to unmarshal onto config struct", slog.Any("error", err))
+		slog.Error("Unable to unmarshal onto config struct", slog.Any("error", err))
 	}
 }

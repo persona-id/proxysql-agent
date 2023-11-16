@@ -6,7 +6,7 @@ A simple, statically compiled go binary for use in maintaining the state of a [P
 
 MVP will include the ability for the agent to maintain the `core` cluster and the `satellite` cluster, each of which has its own set of commands that need to be run.
 
-**NB**: I'd like to open source this ASAP, provided we get signoff from legal. There is so little tooling for ProxySQL out there, this might be useful to someone out there.
+**NB**: I'd like to open source this ASAP, provided we get signoff from legal. There is so little tooling for ProxySQL out there, this might be useful to someone.
 
 #### Why did you pick golang, if we're a Ruby shop?
 

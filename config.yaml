@@ -7,9 +7,12 @@ log_level: "DEBUG"
 
 # proxysql admin configuration
 proxysql:
-  address: "127.0.0.1:6032"   # default: 127.0.0.1:6032
-  username: "radmin"           # default: admin
-  password: "radmin"        # default: NONE
+  # default: 127.0.0.1:6032
+  address: "127.0.0.1:6032"
+  # default: admin
+  username: "radmin"
+  # default: NONE
+  password: "radmin"
 
 # the mode in which the agent should run, if any. valid values: [core OR satellite], mutually exclusive, no default
 # run_mode: core
@@ -32,6 +35,7 @@ satellite:
   # the number of seconds to pause in the loop. defaults to 10
   interval: 10
 
+# NYI
 # valid values: [rest, socket]
 interfaces:
 - rest    # start the http rest interface
