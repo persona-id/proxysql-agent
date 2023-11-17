@@ -30,6 +30,9 @@ lint:
 	@gofmt -s -l -w .
 	@go vet ./...
 
+test:
+	@go test -shuffle=on -v
+
 # cross compile for linux
 linux: clean $(TARGET)
 	@GOOS="linux" GOARCH="amd64" go build $(LDFLAGS) -o $(TARGET) .

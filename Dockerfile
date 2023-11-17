@@ -37,7 +37,7 @@ RUN apk update \
 WORKDIR /app
 
 COPY --chown=agent:agent --from=builder --chmod=700 /build/proxysql-agent /app/
-COPY --chown=agent:agent --from=builder --chmod=600 /build/config.yaml /app/
+COPY --chown=agent:agent --from=builder --chmod=600 /build/example_config.yaml /app/config.yaml
 
 USER agent
 
