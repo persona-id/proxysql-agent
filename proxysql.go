@@ -17,14 +17,15 @@ import (
 )
 
 type ProxySQL struct {
-	dsn  string
-	conn *sql.DB
+	conn     *sql.DB
+	settings *config
 }
 
-func (p *ProxySQL) New() (*ProxySQL, error) {
-	address := Config.ProxySQL.Address
-	username := Config.ProxySQL.Username
-	password := Config.ProxySQL.Password
+func (p *ProxySQL) New(configs *config) (*ProxySQL, error) {
+	settings := configs
+	address := settings.ProxySQL.Address
+	username := settings.ProxySQL.Username
+	password := settings.ProxySQL.Password
 
 	dsn := fmt.Sprintf("%s:%s@tcp(%s)/", username, password, address)
 
@@ -40,7 +41,7 @@ func (p *ProxySQL) New() (*ProxySQL, error) {
 
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
-	return &ProxySQL{dsn, conn}, nil
+	return &ProxySQL{conn, settings}, nil
 }
 
 func (p *ProxySQL) Conn() *sql.DB {
@@ -49,10 +50,6 @@ func (p *ProxySQL) Conn() *sql.DB {
 
 func (p *ProxySQL) Ping() error {
 	return p.conn.Ping()
-}
-
-func (p *ProxySQL) Close() {
-	p.conn.Close()
 }
 
 func (p *ProxySQL) GetBackends() (map[string]int, error) {
@@ -84,10 +81,14 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 	return entries, nil
 }
 
-func (p *ProxySQL) Satellite() {
-	interval := Config.Satellite.Interval
+//
+// Satellite mode specific functons
+//
 
-	slog.Info("Satellite mode initialized, looping", slog.Int("interval (s)", interval))
+func (p *ProxySQL) Satellite() {
+	interval := p.settings.Satellite.Interval
+
+	slog.Info("Satellite mode initialized, looping", slog.Int("interval", interval))
 
 	for {
 		err := p.SatelliteResync()
@@ -141,17 +142,19 @@ func (p *ProxySQL) SatelliteResync() error {
 	return nil
 }
 
-// PodInfo represents information about a Kubernetes pod.
+//
+// Core mode specific settings
+//
+
 type PodInfo struct {
 	PodIP    string
 	Hostname string
 }
 
-// Core is the main function for ProxySQL core operations.
 func (p *ProxySQL) Core() {
-	interval := Config.Core.Interval
+	interval := p.settings.Core.Interval
 
-	slog.Info("Core mode initialized, running loop", slog.Int("interval (s)", interval))
+	slog.Info("Core mode initialized, running loop", slog.Int("interval", interval))
 
 	for {
 		p.coreLoop()
@@ -161,7 +164,7 @@ func (p *ProxySQL) Core() {
 }
 
 func (p *ProxySQL) coreLoop() {
-	pods, err := GetCorePods()
+	pods, err := GetCorePods(p.settings)
 	if err != nil {
 		slog.Error("Failed to get pod info", slog.Any("error", err))
 		return
@@ -204,9 +207,9 @@ func (p *ProxySQL) coreLoop() {
 	slog.Info("Commands ran", slog.String("commands", strings.Join(commands, "; ")))
 }
 
-func GetCorePods() ([]PodInfo, error) {
-	app := Config.Core.PodSelector.App
-	component := Config.Core.PodSelector.Component
+func GetCorePods(settings *config) ([]PodInfo, error) {
+	app := settings.Core.PodSelector.App
+	component := settings.Core.PodSelector.Component
 
 	config, err := rest.InClusterConfig()
 	if err != nil {

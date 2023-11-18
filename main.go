@@ -8,30 +8,30 @@ import (
 
 var (
 	// compile time info
-	Build = ""
+	Build     = ""
 	BuildTime = ""
-	Version = ""
+	Version   = ""
 )
 
 func main() {
-	err := Configure()
+	settings, err := Configure()
 	if err != nil {
 		panic(err)
 	}
 
-	setupLogger()
+	setupLogger(settings)
 
 	slog.Info("build info", slog.Any("version", Version), slog.Any("time", BuildTime), slog.Any("build", Build))
 
 	// if defined, pause before booting; this allows the proxysql pods to fully come up before connecting
-	if Config.StartDelay > 0 {
-		slog.Info("Pausing before boot", slog.Int("seconds", Config.StartDelay))
-		time.Sleep(time.Duration(Config.StartDelay) * time.Second)
+	if settings.StartDelay > 0 {
+		slog.Info("Pausing before boot", slog.Int("seconds", settings.StartDelay))
+		time.Sleep(time.Duration(settings.StartDelay) * time.Second)
 	}
 
 	// open a connection to proxysql
 	var psql *ProxySQL
-	psql, err = psql.New()
+	psql, err = psql.New(settings)
 	if err != nil {
 		slog.Error("Unable to connect to ProxySQL", slog.Any("error", err))
 		panic(err)
@@ -39,7 +39,7 @@ func main() {
 
 	// run the process in either core or satellite mode; each of these is a for {} loop,
 	// so it will block the process from exiting
-	mode := Config.RunMode
+	mode := settings.RunMode
 	if mode == "core" {
 		psql.Core()
 	} else if mode == "satellite" {
@@ -47,10 +47,10 @@ func main() {
 	}
 }
 
-func setupLogger() {
+func setupLogger(settings *config) {
 	var level slog.Level
 
-	switch Config.LogLevel {
+	switch settings.LogLevel {
 	case "DEBUG":
 		level = slog.LevelDebug
 	case "INFO":

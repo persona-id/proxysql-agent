@@ -33,6 +33,7 @@ This is currently in alpha. Do not use it in production yet.
 There are some linear tickets, but here's a high level overview of what I have in mind.
 
 - *P1* - Health checks; replace the ruby health probe with this
+  - since this is a sidecar, I'm not entirely sure how I would be able to do this. Maybe compile it and add it to our proxysql image, and use `--health-check` to only run healthchecks as a standalone binary, and 86 the ruby stuff
 - *P1* - Replace the pre-stop ruby script with this
 - *P2* - Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format TBD
 - *P2* - HTTP API for controlling the agent. Much to do here, many ideas
@@ -52,4 +53,5 @@ Libraries in use:
 
 Misc:
 
+* Look into using [nacelle](https://www.nacelle.dev/docs/topics/overview/) down the road
 * Some leader election examples: [golang-k8s-leader-example](https://github.com/mjasion/golang-k8s-leader-example)

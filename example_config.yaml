@@ -2,10 +2,10 @@
 # set a pause of time of 5 seconds to allow the proxysql container to start; defaults to 1
 start_delay: 5
 
-# logging level for the app. follows zerolog conventions; defaults to INFO
+# logging level for the app. follows log/slog conventions; defaults to INFO
 log_level: "DEBUG"
 
-# proxysql admin configuration
+# proxysql admin connection configuration
 proxysql:
   # default: 127.0.0.1:6032
   address: "127.0.0.1:6032"
@@ -21,10 +21,8 @@ proxysql:
 core:
   # number of seconds to pause in the loop. defaults to 10
   interval: 10
-  # the path to the pod checksum file. defaults to /tmp/pods-cs.txt
-  checksum_file: "/tmp/pods-cs.txt"
   # the k8s selector for the core pods
-  pod_selector:
+  podselector:
     # defaults to proxysql
     app: proxysql
     # defaults to core
