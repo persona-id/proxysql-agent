@@ -24,14 +24,18 @@ build: clean $(TARGET)
 	@true
 
 clean:
-	@rm -f $(TARGET)
+	@rm -rf $(TARGET) coverage
 
 lint:
 	@gofmt -s -l -w .
 	@go vet ./...
 
-test:
-	@go test -shuffle=on -v
+test: lint
+	@mkdir -p coverage
+	@go test -v -shuffle=on -coverprofile coverage/coverage.out
+
+coverage: test
+	@go tool cover -html=coverage/coverage.out
 
 # cross compile for linux
 linux: clean $(TARGET)
