@@ -13,3 +13,6 @@ proxysql-agent
 # Test binary, built with `go test -c`
 *.test
 *.out
+
+# test coverage output
+coverage

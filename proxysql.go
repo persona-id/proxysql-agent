@@ -44,10 +44,6 @@ func (p *ProxySQL) New(configs *config) (*ProxySQL, error) {
 	return &ProxySQL{conn, settings}, nil
 }
 
-func (p *ProxySQL) Conn() *sql.DB {
-	return p.conn
-}
-
 func (p *ProxySQL) Ping() error {
 	return p.conn.Ping()
 }
@@ -96,6 +92,7 @@ func (p *ProxySQL) Satellite() {
 			slog.Error("Error running resync", slog.Any("error", err))
 		}
 
+		p.Ping()
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 }
@@ -149,7 +146,15 @@ func (p *ProxySQL) SatelliteResync() error {
 type PodInfo struct {
 	PodIP    string
 	Hostname string
+	UID      string
 }
+
+// Define a custom type to implement the Sort interface
+type ByPodIP []PodInfo
+
+func (a ByPodIP) Len() int           { return len(a) }
+func (a ByPodIP) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByPodIP) Less(i, j int) bool { return a[i].PodIP < a[j].PodIP }
 
 func (p *ProxySQL) Core() {
 	interval := p.settings.Core.Interval
@@ -167,6 +172,11 @@ func (p *ProxySQL) coreLoop() {
 	pods, err := GetCorePods(p.settings)
 	if err != nil {
 		slog.Error("Failed to get pod info", slog.Any("error", err))
+		return
+	}
+
+	if len(pods) == 0 {
+		slog.Error("No pods returned")
 		return
 	}
 
@@ -227,7 +237,7 @@ func GetCorePods(settings *config) ([]PodInfo, error) {
 
 	var corePods []PodInfo
 	for _, pod := range pods.Items {
-		corePods = append(corePods, PodInfo{PodIP: pod.Status.PodIP, Hostname: pod.Name})
+		corePods = append(corePods, PodInfo{PodIP: pod.Status.PodIP, Hostname: pod.Name, UID: string(pod.GetUID())})
 	}
 
 	return corePods, err
@@ -237,7 +247,7 @@ func calculateChecksum(pods []PodInfo) string {
 	data := []string{}
 
 	for _, pod := range pods {
-		data = append(data, fmt.Sprintf("%s:%s", pod.PodIP, pod.Hostname))
+		data = append(data, fmt.Sprintf("%s:%s:%s", pod.PodIP, pod.Hostname, pod.UID))
 	}
 
 	sort.Strings(data)
@@ -246,6 +256,8 @@ func calculateChecksum(pods []PodInfo) string {
 }
 
 func createCommands(pods []PodInfo) []string {
+	sort.Sort(ByPodIP(pods))
+
 	commands := []string{"DELETE FROM proxysql_servers"}
 
 	for _, pod := range pods {
