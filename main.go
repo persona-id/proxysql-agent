@@ -23,7 +23,10 @@ func main() {
 
 	slog.Info("build info", slog.Any("version", Version), slog.Any("time", BuildTime), slog.Any("build", Build))
 
-	// if defined, pause before booting; this allows the proxysql pods to fully come up before connecting
+	// if defined, pause before booting; this allows the proxysql pods to fully come up before the agent tries
+	// connecting. Sometimes the proxysql container takes a a few seconds to fully start. This is mainly only
+	// an issue when booting into core or satellite mode; any other commands that might be run ad hoc should be
+	// fine
 	if settings.StartDelay > 0 {
 		slog.Info("Pausing before boot", slog.Int("seconds", settings.StartDelay))
 		time.Sleep(time.Duration(settings.StartDelay) * time.Second)
@@ -44,6 +47,10 @@ func main() {
 		psql.Core()
 	} else if mode == "satellite" {
 		psql.Satellite()
+	} else if mode == "dump" {
+		psql.DumpData()
+	} else {
+		slog.Info("No run mode specified, exiting")
 	}
 }
 

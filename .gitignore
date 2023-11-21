@@ -16,3 +16,4 @@ proxysql-agent
 
 # test coverage output
 coverage
+tmp

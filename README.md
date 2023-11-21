@@ -32,16 +32,17 @@ This is currently in alpha. Do not use it in production yet.
 
 There are some linear tickets, but here's a high level overview of what I have in mind.
 
+- *P1* - Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format TBD
 - *P1* - Health checks; replace the ruby health probe with this
   - since this is a sidecar, I'm not entirely sure how I would be able to do this. Maybe compile it and add it to our proxysql image, and use `--health-check` to only run healthchecks as a standalone binary, and 86 the ruby stuff
-- *P1* - Replace the pre-stop ruby script with this
-- *P2* - Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format TBD
-- *P2* - HTTP API for controlling the agent. Much to do here, many ideas
+- *P2* - Replace the pre-stop ruby script with this
+- *P3* - HTTP API for controlling the agent. Much to do here, many ideas
   - health checks
   - get proxysql admin status
   - force a satellite resync (if running in satellite mode)
   - etc
 - *P3* - Leader election; elect one core pod and have it be responsible for managing cluster state
+- *P3* - "plugin" support; we don't necessarily need to add all the Persona specific cases to the main agent, as they won't likely apply to most people
 
 ### See also
 
