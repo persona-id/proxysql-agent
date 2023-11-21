@@ -24,7 +24,7 @@ build: clean $(TARGET)
 	@true
 
 clean:
-	@rm -rf $(TARGET) coverage
+	@rm -rf $(TARGET) coverage tmp/*
 
 lint:
 	@gofmt -s -l -w .

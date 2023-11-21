@@ -118,7 +118,7 @@ func Configure() (*config, error) {
 	// run some validations before proceeding
 	if viper.GetViper().IsSet("run_mode") {
 		run_mode := viper.GetViper().GetString("run_mode")
-		if run_mode != "core" && run_mode != "satellite" {
+		if run_mode != "core" && run_mode != "satellite" && run_mode != "dump" {
 			return nil, errors.New("run_mode must be either 'core' or 'satellite'")
 		}
 	}
