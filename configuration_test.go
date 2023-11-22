@@ -93,6 +93,7 @@ func TestDefaults(t *testing.T) {
 
 	assert.Equal(t, 10, defaultsConfig.Satellite.Interval)
 }
+
 func TestConfigFile(t *testing.T) {
 	tmpfile, err := os.CreateTemp("", "config_test_*.yaml")
 	assert.NoError(t, err)
@@ -162,7 +163,8 @@ func TestEnvironment(t *testing.T) {
 }
 
 func TestFlags(t *testing.T) {
-	os.Args = []string{"cmd",
+	os.Args = []string{
+		"cmd",
 		"--start_delay=415",
 		"--log_level=ERROR",
 		"--run_mode=core",

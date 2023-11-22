@@ -18,7 +18,7 @@ RUN go mod download
 
 COPY . .
 
-RUN apk update  && apk add --no-cache git && rm -rf /var/cache/apk/*
+RUN apk update && apk add --no-cache git && rm -rf /var/cache/apk/*
 
 RUN CGO_ENABLED="0" \
     GOOS="linux" \
@@ -28,6 +28,7 @@ RUN CGO_ENABLED="0" \
 # Stage 2
 FROM alpine:3.18.4 as runner
 
+# add mysql-client to apk add when we're ready
 RUN apk update \
     && apk add --no-cache bash bind-tools \
     && rm -rf /var/cache/apk/* \

@@ -113,10 +113,7 @@ func (p *ProxySQL) GetMissingCorePods() (int, error) {
 }
 
 func (p *ProxySQL) SatelliteResync() error {
-	var missing = -1
-	var err error
-
-	missing, err = p.GetMissingCorePods()
+	missing, err := p.GetMissingCorePods()
 	if err != nil {
 		return err
 	}
@@ -146,7 +143,7 @@ func (p *ProxySQL) SatelliteResync() error {
 //  2. mysql_query_rules
 //  3. stats_mysql_query_rules
 //
-// FIXME: all these functions dump to ./tmp/X.csv; we want the directory to be configurable at least
+// FIXME: all these functions dump to ./tmp/X.csv; we want the directory to be configurable at least.
 func (p *ProxySQL) DumpData() {
 	tmpdir, _ := os.MkdirTemp("tmp", "")
 
@@ -424,6 +421,7 @@ func (p *ProxySQL) DumpQueryRuleStats(tmpdir string) (string, error) {
 	// Don't proceed with this function if there are no query rules
 	if rowCount <= 0 {
 		slog.Debug("No query rules stats, not proceeding with DumpQueryRuleStats()")
+
 		return "", nil
 	}
 
@@ -491,7 +489,7 @@ type PodInfo struct {
 	UID      string
 }
 
-// Define a custom type to implement the Sort interface
+// Define a custom type to implement the Sort interface.
 type ByPodIP []PodInfo
 
 func (a ByPodIP) Len() int           { return len(a) }
@@ -551,7 +549,7 @@ func (p *ProxySQL) coreLoop() {
 	}
 
 	// Write the new checksum to the file for the next run
-	err = os.WriteFile(checksumFile, []byte(digest), 0644)
+	err = os.WriteFile(checksumFile, []byte(digest), 0o644)
 	if err != nil {
 		slog.Error("Failed to write to checksum file", slog.String("file", checksumFile), slog.Any("error", err))
 	}

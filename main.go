@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	// compile time info
+	// compile time info.
 	Build     = ""
 	BuildTime = ""
 	Version   = ""

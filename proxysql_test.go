@@ -13,20 +13,20 @@ var tmpConfig = &config{
 	StartDelay: 0,
 	LogLevel:   "",
 	ProxySQL: struct {
-		Address  string "mapstructure:\"address\""
-		Username string "mapstructure:\"username\""
-		Password string "mapstructure:\"password\""
+		Address  string `mapstructure:"address"`
+		Username string `mapstructure:"username"`
+		Password string `mapstructure:"password"`
 	}{},
 	RunMode: "",
 	Core: struct {
-		Interval    int "mapstructure:\"interval\""
+		Interval    int `mapstructure:"interval"`
 		PodSelector struct {
-			App       string "mapstructure:\"app\""
-			Component string "mapstructure:\"component\""
+			App       string `mapstructure:"app"`
+			Component string `mapstructure:"component"`
 		} "mapstructure:\"podselector\""
 	}{},
 	Satellite: struct {
-		Interval int "mapstructure:\"interval\""
+		Interval int `mapstructure:"interval"`
 	}{},
 	Interfaces: []string{},
 }

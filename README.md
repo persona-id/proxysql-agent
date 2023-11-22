@@ -2,7 +2,7 @@
 
 ## About
 
-A simple, statically compiled go binary for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster. Also includes a [Dockerfile](Dockerfile) to generate a debian based image, for use as a kubernetes sidecar.
+A simple, statically compiled go binary for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster. Also includes a [Dockerfile](Dockerfile) to generate an alpine based image, for use as a kubernetes sidecar.
 
 MVP will include the ability for the agent to maintain the `core` cluster and the `satellite` cluster, each of which has its own set of commands that need to be run.
 
