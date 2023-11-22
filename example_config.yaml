@@ -1,6 +1,6 @@
 ---
 # set a pause of time of 5 seconds to allow the proxysql container to start; defaults to 1
-start_delay: 5
+start_delay: 0
 
 # logging level for the app. follows log/slog conventions; defaults to INFO
 log_level: "DEBUG"
@@ -32,9 +32,3 @@ core:
 satellite:
   # the number of seconds to pause in the loop. defaults to 10
   interval: 10
-
-# NYI
-# valid values: [rest, socket]
-interfaces:
-- rest    # start the http rest interface
-- socket  # start the unix socket interface

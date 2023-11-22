@@ -1,4 +1,4 @@
-module github.com/persona-id/proxysql-agent
+module github.com/kuzmik/proxysql-agent
 
 go 1.21.4
 

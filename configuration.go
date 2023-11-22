@@ -80,9 +80,7 @@ func Configure() (*config, error) {
 
 	// read the config file, if it exists. if not, keep on truckin'
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// Config file not found; ignore error and move on
-		} else {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, err
 		}
 	}
@@ -104,10 +102,18 @@ func Configure() (*config, error) {
 	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop")
 
 	pflag.Bool("show-config", false, "Dump the configuration for debugging")
-	pflag.CommandLine.MarkHidden("show-config")
+
+	err := pflag.CommandLine.MarkHidden("show-config")
+	if err != nil {
+		return nil, err
+	}
 
 	pflag.Parse()
-	viper.BindPFlags(pflag.CommandLine)
+
+	err = viper.BindPFlags(pflag.CommandLine)
+	if err != nil {
+		return nil, err
+	}
 
 	// we are only dumping the config if the secret flag show-config is specified, because the config
 	// contains the proxysql admin password
@@ -117,8 +123,8 @@ func Configure() (*config, error) {
 
 	// run some validations before proceeding
 	if viper.GetViper().IsSet("run_mode") {
-		run_mode := viper.GetViper().GetString("run_mode")
-		if run_mode != "core" && run_mode != "satellite" && run_mode != "dump" {
+		runMode := viper.GetViper().GetString("run_mode")
+		if runMode != "core" && runMode != "satellite" && runMode != "dump" {
 			return nil, errors.New("run_mode must be either 'core' or 'satellite'")
 		}
 	}
@@ -136,7 +142,8 @@ func Configure() (*config, error) {
 	}
 
 	settings := &config{}
-	err := viper.Unmarshal(&settings)
+
+	err = viper.Unmarshal(&settings)
 	if err != nil {
 		return nil, err
 	}

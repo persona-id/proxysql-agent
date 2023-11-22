@@ -29,8 +29,9 @@ clean:
 lint:
 	@gofmt -s -l -w .
 	@go vet ./...
+	@golangci-lint run --allow-parallel-runners --fix
 
-test: lint
+test:
 	@mkdir -p coverage
 	@go test -v -shuffle=on -coverprofile coverage/coverage.out
 

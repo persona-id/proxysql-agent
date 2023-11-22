@@ -61,9 +61,8 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var hostgroup int
+		var hostgroup, port int
 		var hostname string
-		var port int
 
 		err := rows.Scan(&hostgroup, &hostname, &port)
 		if err != nil {
@@ -94,15 +93,24 @@ func (p *ProxySQL) Satellite() {
 			slog.Error("Error running resync", slog.Any("error", err))
 		}
 
-		p.Ping()
+		err = p.Ping()
+		if err != nil {
+			slog.Error("Error calling Ping()", slog.Any("error", err))
+		}
+
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 }
 
 func (p *ProxySQL) GetMissingCorePods() (int, error) {
-	var count int = -1
+	count := -1
 
-	row := p.conn.QueryRow("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+	query := `SELECT COUNT(hostname)
+			FROM stats_proxysql_servers_metrics
+			WHERE last_check_ms > 30000
+			AND hostname != 'proxysql-core'
+			AND Uptime_s > 0`
+	row := p.conn.QueryRow(query)
 
 	err := row.Scan(&count)
 	if err != nil {
@@ -145,7 +153,7 @@ func (p *ProxySQL) SatelliteResync() error {
 //
 // FIXME: all these functions dump to ./tmp/X.csv; we want the directory to be configurable at least.
 func (p *ProxySQL) DumpData() {
-	tmpdir, _ := os.MkdirTemp("tmp", "")
+	tmpdir, _ := os.MkdirTemp("/tmp", "")
 
 	digestsFile, err := p.DumpQueryDigests(tmpdir)
 	if err != nil {
@@ -173,6 +181,7 @@ func (p *ProxySQL) DumpData() {
 func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	var rowCount int
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM stats_mysql_query_digest").Scan(&rowCount)
+
 	if err != nil {
 		return "", err
 	}
@@ -180,6 +189,7 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	// Don't proceed with this function if there are no entries in the table
 	if rowCount <= 0 {
 		slog.Debug("No query digests in the log, not proceeding with DumpQueryDigests()")
+
 		return "", nil
 	}
 
@@ -193,11 +203,13 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 		}
 	}
 
-	dumpFile := fmt.Sprintf("./%s/%s-digests.csv", tmpdir, hostname)
+	dumpFile := fmt.Sprintf("%s/%s-digests.csv", tmpdir, hostname)
 	file, err := os.Create(dumpFile)
+
 	if err != nil {
 		return "", err
 	}
+
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
@@ -234,7 +246,8 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 		var schemaname, username, clientAddress, digest, digestText string
 		var countStar, firstSeen, lastSeen, sumTime, minTime, maxTime, sumRowsAffected, sumRowsSent int
 
-		err := rows.Scan(&hostgroup, &schemaname, &username, &clientAddress, &digest, &digestText, &countStar, &firstSeen, &lastSeen, &sumTime, &minTime, &maxTime, &sumRowsAffected, &sumRowsSent)
+		err := rows.Scan(&hostgroup, &schemaname, &username, &clientAddress, &digest, &digestText, &countStar,
+			&firstSeen, &lastSeen, &sumTime, &minTime, &maxTime, &sumRowsAffected, &sumRowsSent)
 		if err != nil {
 			return "", err
 		}
@@ -269,14 +282,17 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 // ProxySQL docs: https://proxysql.com/documentation/main-runtime/#mysql_query_rules
 func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 	var rowCount int
+
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM mysql_query_rules").Scan(&rowCount)
 	if err != nil {
+
 		return "", err
 	}
 
 	// Don't proceed with this function if there are no query rules
 	if rowCount <= 0 {
 		slog.Debug("No query rules defined, not proceeding with DumpQueryRules()")
+
 		return "", nil
 	}
 
@@ -290,11 +306,13 @@ func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 		}
 	}
 
-	dumpFile := fmt.Sprintf("./%s/%s-rules.csv", tmpdir, hostname)
+	dumpFile := fmt.Sprintf("%s/%s-rules.csv", tmpdir, hostname)
+
 	file, err := os.Create(dumpFile)
 	if err != nil {
 		return "", err
 	}
+
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
@@ -349,8 +367,11 @@ func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var ruleID, active, flagIN, proxyPort, negateMatchPattern, flagOUT, destinationHostgroup, cacheTTL, cacheEmptyResult, cacheTimeout, reconnect, timeout, retries, delay, nextQueryFlagIN, mirrorFlagOUT, mirrorHostgroup, stickyConn, multiplex, gtidFromHostgroup, log, apply sql.NullInt64
-		var username, schemaname, clientAddr, proxyAddr, digest, matchDigest, matchPattern, reModifiers, replacePatternStr, errorMsg, okMsg, attributes, comment sql.NullString
+		var ruleID, active, flagIN, proxyPort, negateMatchPattern, flagOUT, destinationHostgroup, cacheTTL,
+			cacheEmptyResult, cacheTimeout, reconnect, timeout, retries, delay, nextQueryFlagIN, mirrorFlagOUT,
+			mirrorHostgroup, stickyConn, multiplex, gtidFromHostgroup, log, apply sql.NullInt64
+		var username, schemaname, clientAddr, proxyAddr, digest, matchDigest, matchPattern, reModifiers,
+			replacePatternStr, errorMsg, okMsg, attributes, comment sql.NullString
 
 		err := rows.Scan(
 			&ruleID, &active, &username, &schemaname, &flagIN, &clientAddr, &proxyAddr, &proxyPort,
@@ -413,6 +434,7 @@ func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 // ProxySQL docs: https://proxysql.com/documentation/stats-statistics/#stats_mysql_query_rules
 func (p *ProxySQL) DumpQueryRuleStats(tmpdir string) (string, error) {
 	var rowCount int
+
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM stats_mysql_query_rules").Scan(&rowCount)
 	if err != nil {
 		return "", err
@@ -435,7 +457,8 @@ func (p *ProxySQL) DumpQueryRuleStats(tmpdir string) (string, error) {
 		}
 	}
 
-	dumpFile := fmt.Sprintf("./%s/%s-rule-stats.csv", tmpdir, hostname)
+	dumpFile := fmt.Sprintf("%s/%s-rule-stats.csv", tmpdir, hostname)
+
 	file, err := os.Create(dumpFile)
 	if err != nil {
 		return "", err
@@ -512,11 +535,13 @@ func (p *ProxySQL) coreLoop() {
 	pods, err := GetCorePods(p.settings)
 	if err != nil {
 		slog.Error("Failed to get pod info", slog.Any("error", err))
+
 		return
 	}
 
 	if len(pods) == 0 {
 		slog.Error("No pods returned")
+
 		return
 	}
 
@@ -533,10 +558,12 @@ func (p *ProxySQL) coreLoop() {
 	// new pods that have joined the cluster
 	if string(old) == digest {
 		command := "LOAD PROXYSQL SERVERS TO RUNTIME"
+
 		_, err = p.conn.Exec(command)
 		if err != nil {
 			slog.Error("Command failed to execute", slog.String("command", command), slog.Any("error", err))
 		}
+
 		return
 	}
 
@@ -549,7 +576,7 @@ func (p *ProxySQL) coreLoop() {
 	}
 
 	// Write the new checksum to the file for the next run
-	err = os.WriteFile(checksumFile, []byte(digest), 0o644)
+	err = os.WriteFile(checksumFile, []byte(digest), 0o600)
 	if err != nil {
 		slog.Error("Failed to write to checksum file", slog.String("file", checksumFile), slog.Any("error", err))
 	}
@@ -601,7 +628,9 @@ func createCommands(pods []PodInfo) []string {
 	commands := []string{"DELETE FROM proxysql_servers"}
 
 	for _, pod := range pods {
-		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES ('%s', 6032, 0, '%s')", pod.PodIP, pod.Hostname))
+		commands = append(commands,
+			fmt.Sprintf("INSERT INTO proxysql_servers VALUES ('%s', 6032, 0, '%s')", pod.PodIP, pod.Hostname),
+		)
 	}
 
 	commands = append(commands,

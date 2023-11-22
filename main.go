@@ -32,8 +32,8 @@ func main() {
 		time.Sleep(time.Duration(settings.StartDelay) * time.Second)
 	}
 
-	// open a connection to proxysql
 	var psql *ProxySQL
+
 	psql, err = psql.New(settings)
 	if err != nil {
 		slog.Error("Unable to connect to ProxySQL", slog.Any("error", err))
@@ -42,14 +42,14 @@ func main() {
 
 	// run the process in either core or satellite mode; each of these is a for {} loop,
 	// so it will block the process from exiting
-	mode := settings.RunMode
-	if mode == "core" {
+	switch settings.RunMode {
+	case "core":
 		psql.Core()
-	} else if mode == "satellite" {
+	case "satellite":
 		psql.Satellite()
-	} else if mode == "dump" {
+	case "dump":
 		psql.DumpData()
-	} else {
+	default:
 		slog.Info("No run mode specified, exiting")
 	}
 }

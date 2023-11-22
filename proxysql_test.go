@@ -40,8 +40,9 @@ func TestPing(t *testing.T) {
 	// mock.ExpectPing()
 
 	proxy := &ProxySQL{db, tmpConfig}
-	proxy.Ping()
+	err = proxy.Ping()
 
+	assert.NoError(t, err, "Ping() should not return an error")
 	assert.NotNil(t, proxy.conn, "Conn should not return nil")
 	assert.NoError(t, mock.ExpectationsWereMet(), "SQL expectations were not met")
 }
