@@ -3,7 +3,7 @@
 start_delay: 0
 
 # logging level for the app. follows log/slog conventions; defaults to INFO
-log_level: "DEBUG"
+log_level: "INFO"
 
 # proxysql admin connection configuration
 proxysql:

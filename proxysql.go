@@ -93,11 +93,6 @@ func (p *ProxySQL) Satellite() {
 			slog.Error("Error running resync", slog.Any("error", err))
 		}
 
-		err = p.Ping()
-		if err != nil {
-			slog.Error("Error calling Ping()", slog.Any("error", err))
-		}
-
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 }
@@ -151,7 +146,7 @@ func (p *ProxySQL) SatelliteResync() error {
 //  2. mysql_query_rules
 //  3. stats_mysql_query_rules
 //
-// FIXME: all these functions dump to ./tmp/X.csv; we want the directory to be configurable at least.
+// FIXME: all these functions dump to /tmp//XXXX/Y.csv; we want the directory to be configurable at least.
 func (p *ProxySQL) DumpData() {
 	tmpdir, _ := os.MkdirTemp("/tmp", "")
 
@@ -643,4 +638,28 @@ func createCommands(pods []PodInfo) []string {
 	)
 
 	return commands
+}
+
+// startup, readiness, and liveness probe replacement. get rid of the ruby and replace it with a simple file check
+// thus function makes sure the pod is health and creates /var/lib/proxysql/healthy when things are good
+func (p *ProxySQL) RunProbes() (int, int, error) {
+	var total, online int
+
+	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	if err != nil {
+		return -1, -1, err
+	}
+
+	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	if err != nil {
+		return -1, -1, err
+	}
+
+	// def client_connections
+	// 	clients = `mysql -NB -e "select Client_Connections_connected from mysql_connections order by timestamp desc limit 1"`.to_i
+	//	@logger.info "Frontend clients connected to proxysql: #{clients}" if @options[:verbose]
+	//	clients
+	// end
+
+	return total, online, nil
 }
