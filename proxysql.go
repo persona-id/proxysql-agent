@@ -641,7 +641,7 @@ func createCommands(pods []PodInfo) []string {
 }
 
 // startup, readiness, and liveness probe replacement. get rid of the ruby and replace it with a simple file check
-// thus function makes sure the pod is health and creates /var/lib/proxysql/healthy when things are good
+// thus function makes sure the pod is health and creates /var/lib/proxysql/healthy when things are good.
 func (p *ProxySQL) RunProbes() (int, int, error) {
 	var total, online int
 

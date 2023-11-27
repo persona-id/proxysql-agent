@@ -1,5 +1,7 @@
 # ProxySQL Agent
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/kuzmik/proxysql-agent)](https://goreportcard.com/report/github.com/kuzmik/proxysql-agent)
+
 ## About
 
 A small, statically compiled go binary for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster. Also includes a [Dockerfile](Dockerfile) to generate an alpine based image, for use as a kubernetes sidecar.
@@ -23,7 +25,7 @@ You can see the code for this in `proxysql.go` in the `Core()` and `Satellite()`
 
 Note that if your cluster is running fine, and the core pods all go away, the satellites will continue to function with the settings they already had; in other words, even if the core pods vanish, you will still serve proxied MySQL traffic.
 
-#### Why did you pick golang, if we're a Ruby shop?
+#### Why did you pick golang, if you work at a Ruby shop?
 
 I looked into using ruby, and in fact the "agents" we are currently running **are** written in ruby, but there have been some issues:
 
@@ -33,7 +35,7 @@ I looked into using ruby, and in fact the "agents" we are currently running **ar
 - We can statically compile this, and don't need to mess with a bunch of ruby gems. And I mean a _bunch_ of ruby gems
 - k8s tooling is generally written in Golang, and it shows. The ruby k8s gems are not as good as the golang libraries, unfortunately
 
-I will say, I _am_ more comfortable with Ruby and am still leaning all of the Go... **pecularities**... so I am more than open to feedback here. However, since this is such a simple application I have no qualms about the choice of language.
+I will say, I _am_ more comfortable with Ruby and am still leaning all of the Go differences, so I am more than open to feedback here. However, since this is such a simple application I have no qualms about the choice of language.
 
 ### Design
 
@@ -48,7 +50,7 @@ This is currently in alpha. Do not use it in production yet.
 There are some linear tickets, but here's a high level overview of what I have in mind.
 
 - *P1* - Health checks; replace the ruby health probe with this
-  - make use of a filesystem check for this; use the agent to drop a file into the proxysql container FS (for either healthy or not, haven't decided yet), and make the proxysql container healthcheck monitor that file
+  - Use an HTTP endpoint for health checks, because the proxysql container can call the agent container; meaning, if we configure k8s to load `localhost:8080/status` in the proxysql container, and that endpoint is running in the sidecar, it will work just fine
 - *P2* - Replace the pre-stop ruby script with this
   - same deal as the health check, use the shared FS for this
 - *P3* - Leader election; elect one core pod and have it be responsible for managing cluster state
@@ -57,11 +59,17 @@ There are some linear tickets, but here's a high level overview of what I have i
     - feature branch currently has it as included in the main agent, but I will extract it later
   - uploading of the CSV dump files to snowflake (likely GCS in this case)
 - *P5* - HTTP API for controlling the agent. Much to do here, many ideas
-  - health checks
   - get proxysql admin status
   - force a satellite resync (if running in satellite mode)
   - etc
   - Now I'm no sure this is that important; we can just add more commands to the agent, and run said commands from the CLI
+
+
+### MVP Requirements
+
+1. ✅ Cluster management (ie: core and satellite agents) (completed)
+1. 🏗️ Health checks via an HTTP endpoint, specifically for the ProxySQL container (in progress)
+1. Pre-stop hook replacement
 
 #### Done
 
@@ -77,5 +85,5 @@ Libraries in use:
 
 Misc:
 
-* Look into using [nacelle](https://www.nacelle.dev/docs/topics/overview/) down the road
+* Look into possibly using [nacelle](https://www.nacelle.dev/docs/topics/overview/) down the road
 * Some leader election examples: [golang-k8s-leader-example](https://github.com/mjasion/golang-k8s-leader-example)
