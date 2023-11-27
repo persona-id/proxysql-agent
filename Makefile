@@ -29,7 +29,7 @@ clean:
 lint:
 	@gofmt -s -l -w .
 	@go vet ./...
-	@golangci-lint run --allow-parallel-runners --fix
+	@golangci-lint run --config=.golangci.yml --allow-parallel-runners
 
 test:
 	@mkdir -p coverage

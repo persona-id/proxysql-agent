@@ -50,7 +50,8 @@ func statusHandler(psql *ProxySQL) http.HandlerFunc {
 
 // Run PING() on the proxysql server for core pods; we don't want core pods to go
 // unhealthy if there are missing backends. We just want to ensure that proxysql
-// is up and listening.
+// is up and listening. This also has the intended side effect of ensuring that
+// the mysql connection to the admin port is open
 // call: curl http://localhost:8080/healthz/ping
 func pingHandler(psql *ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
