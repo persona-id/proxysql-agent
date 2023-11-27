@@ -644,3 +644,27 @@ func createCommands(pods []PodInfo) []string {
 
 	return commands
 }
+
+// startup, readiness, and liveness probe replacement. get rid of the ruby and replace it with a simple file check
+// thus function makes sure the pod is health and creates /var/lib/proxysql/healthy when things are good
+func (p *ProxySQL) RunProbes() (int, int, error) {
+	var total, online int
+
+	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	if err != nil {
+		return -1, -1, err
+	}
+
+	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	if err != nil {
+		return -1, -1, err
+	}
+
+	// def client_connections
+	// 	clients = `mysql -NB -e "select Client_Connections_connected from mysql_connections order by timestamp desc limit 1"`.to_i
+	//	@logger.info "Frontend clients connected to proxysql: #{clients}" if @options[:verbose]
+	//	clients
+	// end
+
+	return total, online, nil
+}

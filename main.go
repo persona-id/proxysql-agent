@@ -44,8 +44,10 @@ func main() {
 	// so it will block the process from exiting
 	switch settings.RunMode {
 	case "core":
+		go StartAPI(psql) // start the http api
 		psql.Core()
 	case "satellite":
+		go StartAPI(psql) // start the http api
 		psql.Satellite()
 	case "dump":
 		psql.DumpData()
