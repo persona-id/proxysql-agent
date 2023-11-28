@@ -640,9 +640,66 @@ func createCommands(pods []PodInfo) []string {
 	return commands
 }
 
-// startup, readiness, and liveness probe replacement. get rid of the ruby and replace it with a simple file check
-// thus function makes sure the pod is health and creates /var/lib/proxysql/healthy when things are good.
-func (p *ProxySQL) RunProbes() (int, int, error) {
+// k8s probes
+
+type ProbeResult struct {
+	Status   string `json:"status,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Clients  int    `json:"clients,omitempty"`
+	Draining bool   `json:"draining,omitempty"`
+	Probe    string `json:"probe,omitempty"`
+	Backends struct {
+		Total  int `json:"total,omitempty"`
+		Online int `json:"online,omitempty"`
+	} `json:"backends,omitempty"`
+}
+
+func (p *ProxySQL) RunProbes() (ProbeResult, error) {
+	total, online, err := p.probeBackends()
+	if err != nil {
+		return ProbeResult{}, err
+	}
+
+	clients, err := p.probeClients()
+	if err != nil {
+		return ProbeResult{}, err
+	}
+
+	results := ProbeResult{
+		Clients:  clients,
+		Draining: probeDraining(),
+	}
+
+	results.Backends.Total = total
+	results.Backends.Online = online
+
+	return processResults(results), nil
+}
+
+func processResults(results ProbeResult) ProbeResult {
+	if results.Backends.Online == results.Backends.Total {
+		// all backends are up and running, we're totally healthy
+		results.Status = "ok"
+		results.Message = "all backends online"
+	} else if results.Backends.Online > 0 {
+		// some backends are offline in some way, so while we're healthy, it's not perfect
+		results.Status = "ok"
+		results.Message = "some backends offline"
+	} else {
+		// all backends are offline in some way
+		results.Status = "unhealthy"
+		results.Message = "all backends offline"
+	}
+
+	if results.Draining {
+		results.Status = "draining"
+		results.Message = "draining traffic"
+	}
+
+	return results
+}
+
+func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
 	var total, online int
 
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
@@ -655,11 +712,34 @@ func (p *ProxySQL) RunProbes() (int, int, error) {
 		return -1, -1, err
 	}
 
-	// def client_connections
-	// 	clients = `mysql -NB -e "select Client_Connections_connected from mysql_connections order by timestamp desc limit 1"`.to_i
-	//	@logger.info "Frontend clients connected to proxysql: #{clients}" if @options[:verbose]
-	//	clients
-	// end
+	return online, total, nil
+}
 
-	return total, online, nil
+func (p *ProxySQL) probeClients() (int /* clients connected */, error) {
+	var online int
+
+	err := p.conn.QueryRow("SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1").Scan(&online)
+	if err != nil {
+		return -1, err
+	}
+
+	return online, nil
+}
+
+// if the file /tmp/draining exists, we're in maint mode or draining traffic
+// for a shutdown, and should return unhealthy.
+func probeDraining() bool {
+	filename := "/tmp/draining"
+
+	_, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		// err for file doesnt exist, which means we're not draining
+		return false
+	} else if err != nil {
+		// random other error, not sure how to deal with that right now
+		return false
+	} else {
+		// file exists, we're draining traffic or in maint mode
+		return true
+	}
 }
