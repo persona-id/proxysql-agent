@@ -7,10 +7,9 @@ import (
 )
 
 var (
-	// compile time info.
-	Build     = ""
-	BuildTime = ""
-	Version   = ""
+	version = ""
+	build   = ""
+	built   = ""
 )
 
 func main() {
@@ -21,7 +20,7 @@ func main() {
 
 	setupLogger(settings)
 
-	slog.Info("build info", slog.Any("version", Version), slog.Any("time", BuildTime), slog.Any("build", Build))
+	slog.Info("build info", slog.Any("version", version), slog.Any("time", built), slog.Any("build", build))
 
 	// if defined, pause before booting; this allows the proxysql pods to fully come up before the agent tries
 	// connecting. Sometimes the proxysql container takes a a few seconds to fully start. This is mainly only

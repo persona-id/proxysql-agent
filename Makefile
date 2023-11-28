@@ -15,7 +15,7 @@ LDFLAGS=-ldflags "-X 'main.Version=$(VERSION)' -X 'main.Build=$(BUILD_SHA)' -X '
 # go source files, ignore vendor directory
 SRC=$(shell find . -type f -name '*.go')
 
-all: clean build
+all: clean lint build
 
 $(TARGET): $(SRC)
 	@go build $(LDFLAGS) -o $(TARGET)
@@ -45,5 +45,5 @@ linux: clean $(TARGET)
 run: build
 	@./$(TARGET)
 
-docker: clean
+docker: clean lint
 	@docker build --build-arg="VERSION=${VERSION}" --build-arg="BUILD_TIME=${BUILD_TIME}" --build-arg="BUILD_SHA=${BUILD_SHA}" . -t proxysql-agent
