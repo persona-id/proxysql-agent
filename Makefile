@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
-# The name of the executable (default is current directory name)
-TARGET := $(shell echo $${PWD\#\#*/})
+# The name of the executable
+TARGET := 'proxysql-agent'
 
 # These will be provided to the target
 VERSION := 0.9.0
