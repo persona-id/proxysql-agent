@@ -5,7 +5,7 @@ TARGET := 'proxysql-agent'
 
 # These will be provided to the target
 VERSION := 0.9.0
-BUILD_SHA := `git rev-parse HEAD`
+BUILD_SHA := `git rev-parse --short HEAD`
 BUILD_TIME := `date +%FT%T%z`
 
 # Use linker flags to provide version/build settings to the target.
