@@ -41,4 +41,4 @@ COPY --chown=agent:agent --from=builder --chmod=600 /build/example_config.yaml /
 
 USER agent
 
-ENTRYPOINT ["/proxysql-agent"]
+ENTRYPOINT ["/app/proxysql-agent"]
