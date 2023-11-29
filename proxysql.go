@@ -716,20 +716,29 @@ func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends on
 }
 
 func (p *ProxySQL) probeClients() (int /* clients connected */, error) {
-	var online int
+	var online sql.NullInt32
 
-	err := p.conn.QueryRow("SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1").Scan(&online)
+	// this one doesnt appear to do what we want
+	// query := "SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1"
+
+	query := "select sum(ConnUsed) from stats_mysql_connection_pool"
+	err := p.conn.QueryRow(query).Scan(&online)
 	if err != nil {
 		return -1, err
 	}
 
-	return online, nil
+	if online.Valid {
+		return int(online.Int32), nil
+	} else {
+		return -1, nil
+	}
 }
 
 // if the file /tmp/draining exists, we're in maint mode or draining traffic
 // for a shutdown, and should return unhealthy.
 func probeDraining() bool {
-	filename := "/tmp/draining"
+	// FIXME: make this configurable?
+	filename := "/var/lib/proxysql/draining"
 
 	_, err := os.Stat(filename)
 	if os.IsNotExist(err) {
