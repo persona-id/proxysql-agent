@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 )
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.
@@ -22,6 +25,8 @@ func livenessHandler(psql *ProxySQL) http.HandlerFunc {
 			slog.Error("Error in probes()", slog.Any("err", err))
 
 			w.WriteHeader(http.StatusServiceUnavailable)
+
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprint(w, err)
 			return
 		}
@@ -42,6 +47,7 @@ func livenessHandler(psql *ProxySQL) http.HandlerFunc {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 
+		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
 
 		slog.Debug("status check", slog.String("json", string(resultJSON)))
@@ -77,14 +83,17 @@ func readinessHandler(psql *ProxySQL) http.HandlerFunc {
 			slog.Error("Error in probes()", slog.Any("err", err))
 
 			w.WriteHeader(http.StatusServiceUnavailable)
+
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprint(w, err)
+			return
 		}
 
 		results.Probe = "readiness"
 
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
-			fmt.Println("Error marshalling JSON:", err)
+			slog.Error("Error marshaling json", slog.Any("err", err))
 			return
 		}
 
@@ -96,6 +105,7 @@ func readinessHandler(psql *ProxySQL) http.HandlerFunc {
 			w.WriteHeader(http.StatusOK)
 		}
 
+		// nosemgrep:go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
 
 		slog.Debug("status check", slog.String("json", string(resultJSON)))
@@ -114,14 +124,118 @@ func startupHandler(psql *ProxySQL) http.HandlerFunc {
 
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
+
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprintf(w, `{"message": %s, "status": "unhealthy"}`, err)
 
 			slog.Error("Error in pingHandler()", slog.Any("err", err))
 		} else {
 			w.WriteHeader(http.StatusOK)
+
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprint(w, `{"message": "ok", "status": "ok"}`)
 		}
 	}
+}
+
+func preStopHandler(p *ProxySQL) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		//FIXME: make these configurable
+		shutdownDelay := 120
+		hasCSP := false
+		drainFile := "/var/lib/proxysql/draining"
+
+		slog.Info("Pre-stop called, starting shutdown process", slog.Int("shutdownDelay", shutdownDelay))
+
+		_, err := os.Create(drainFile)
+		if err != nil {
+			slog.Error("Error creating drainFile", slog.String("path", drainFile), slog.Any("err", err))
+		}
+
+		// disable new connections
+		commands := []string{
+			fmt.Sprintf("UPDATE global_variables SET variable_value = %d WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time')", (shutdownDelay * 1000)),
+			"UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'",
+			"LOAD MYSQL VARIABLES TO RUNTIME",
+			"PROXYSQL PAUSE;",
+		}
+
+		for _, command := range commands {
+			_, err = p.conn.Exec(command)
+			if err != nil {
+				slog.Error("Command failed", slog.String("commands", command), slog.Any("error", err))
+			}
+		}
+
+		slog.Info("Pre-stop commands ran", slog.String("commands", strings.Join(commands, "; ")))
+
+		for {
+			if safeToTerminate(p) {
+				slog.Info("No connected clients remaining, proceeding with shutdown")
+				break
+			}
+
+			time.Sleep(10 * time.Second)
+		}
+
+		// issue the PROXYSQL KILL command
+		_, err = p.conn.Exec("PROXYSQL KILL")
+		if err != nil {
+			slog.Error("KILL command failed", slog.String("commands", "PROXYSQL KILL"), slog.Any("error", err))
+		}
+
+		// kill cloud-sql-proxy (CSP) if it exists
+		if hasCSP {
+			err = killCSP()
+			if err != nil {
+				slog.Error("Failed to kill CSP", slog.Any("error", err))
+			}
+		}
+
+		time.Sleep(10 * time.Second)
+
+		// Return success response
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		os.Exit(0)
+	}
+}
+
+func safeToTerminate(p *ProxySQL) bool {
+	// check for connected clients, and when it hits 0 return true
+	clients, err := p.probeClients()
+	if err != nil {
+		slog.Error("Error in probeClients()", slog.Any("err", err))
+	}
+
+	if clients > 0 {
+		slog.Info("Clients connected", slog.Int("clients", clients))
+	}
+
+	// maybe we should also return true if a specified amount of time has passed, in order to not let one rogue transaction hold us up.
+
+	return clients == 0
+}
+
+// Kill cloud-sql-proxy (CSP) if it is running; this should be optional and configurable,
+// or moved into a plugin down the road.
+func killCSP() error {
+	// Make an HTTP request to localhost:9091/quitquitquit
+	resp, err := http.Get("http://localhost:9091/quitquitquit")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Check the response status
+	if resp.StatusCode == http.StatusOK {
+		slog.Info("Killed CSP")
+	} else {
+		slog.Warn("HTTP request to CSP failed", slog.String("status", resp.Status))
+	}
+
+	return nil
 }
 
 // StartAPI starts the HTTP server for the ProxySQL agent.
@@ -132,10 +246,15 @@ func StartAPI(p *ProxySQL) {
 	http.HandleFunc("/healthz/ready", readinessHandler(p))
 	http.HandleFunc("/healthz/live", livenessHandler(p))
 
+	http.HandleFunc("/shutdown", preStopHandler(p))
+
 	// FIXME: make this configurable
 	port := ":8080"
 
 	slog.Info("Starting HTTP server", slog.String("port", port))
+
+	// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
 	if err := http.ListenAndServe(port, nil); err != nil {
 		slog.Error("Error starting the HTTP server", slog.Any("err", err))
 

@@ -43,16 +43,13 @@ N/A, as yet
 
 ### Status - Alpha
 
-This is currently in alpha. Do not use it in production yet.
+This is currently in beta.
 
 ### TODOs
 
 There are some linear tickets, but here's a high level overview of what I have in mind.
 
-- *P1* - Health checks; replace the ruby health probe with this
-  - Use an HTTP endpoint for health checks, because the proxysql container can call the agent container; meaning, if we configure k8s to load `localhost:8080/status` in the proxysql container, and that endpoint is running in the sidecar, it will work just fine
-- *P2* - Replace the pre-stop ruby script with this
-  - same deal as the health check, use the shared FS for this
+- *P2* - Better test coverage
 - *P3* - Leader election; elect one core pod and have it be responsible for managing cluster state
 - *P3* - "plugin" support; we don't necessarily need to add all the Persona specific cases to the main agent, as they won't likely apply to most people
   - "chaosmonkey" feature
@@ -63,17 +60,32 @@ There are some linear tickets, but here's a high level overview of what I have i
   - force a satellite resync (if running in satellite mode)
   - etc
   - Now I'm no sure this is that important; we can just add more commands to the agent, and run said commands from the CLI
+- *P5* - If possible, cleanup the errors that are thrown when the `preStop` hook runs. This might not be possible due to how k8s kills containers, but if it is, these errors need to go away:
+    ```
+    time=2023-11-29T02:32:22.422Z level=INFO msg="Pre-stop called, starting shutdown process" shutdownDelay=120
+    time=2023-11-29T02:32:24.341Z level=INFO msg="Pre-stop commands ran" commands="UPDATE global_variables SET variable_value = 120000 WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time'); UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'; LOAD MYSQL VARIABLES TO RUNTIME; PROXYSQL PAUSE;"
+    time=2023-11-29T02:32:24.343Z level=INFO msg="No connected clients remaining, proceeding with shutdown"
+    [mysql] 2023/11/29 02:32:24 packets.go:37: unexpected EOF
+    time=2023-11-29T02:32:24.348Z level=ERROR msg="KILL command failed" commands="PROXYSQL KILL" error="invalid connection"
+    rpc error: code = Unknown desc = Error: No such container: e3153c34e0ad525c280dd26695b78d917b1cb377a545744bffb9b31ad1c90670%
+    ```
 
+#### MVP Requirements
 
-### MVP Requirements
-
-1. ✅ Cluster management (ie: core and satellite agents) (completed)
-1. 🏗️ Health checks via an HTTP endpoint, specifically for the ProxySQL container (in progress)
-1. Pre-stop hook replacement
+1. ✅ Cluster management (ie: core and satellite agents)
+1. ✅ Health checks via an HTTP endpoint, specifically for the ProxySQL container
+1. ✅ Pre-stop hook replacement
 
 #### Done
 
 - *P1* - ~~Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format is CSV~~
+- *P1* - ~~Health checks; replace the ruby health probe with this~~
+- *P2* - ~~Replace the pre-stop ruby script with this~~
+
+### Releasing a new version
+
+1. Update version in Makefile (and anywhere that calls `go build`, like pipelines)
+1. Update the CHANGELOG.md with the changes
 
 ### See also
 
