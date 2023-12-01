@@ -22,7 +22,7 @@ RUN apk update \
     && apk add --no-cache git=2.40.1-r0 \
     && rm -rf /var/cache/apk/* /lib/apk/db/*
 
-RUN CGO_ENABLED="0" go build -ldflags "-s -w -X 'main.version=${VERSION}' -X 'main.build=${BUILD_SHA}' -X 'main.builddate=${BUILD_TIME}'" -o proxysql-agent .
+RUN CGO_ENABLED="0" go build -ldflags "-s -w -X 'main.version=${VERSION}' -X 'main.build=${BUILD_SHA}' -X 'main.builddate=${BUILD_TIME}'" -o proxysql-agent cmd/proxysql-agent/main.go
 
 # Stage 2
 FROM alpine:3.18.4 as runner
@@ -37,7 +37,7 @@ RUN apk update \
 WORKDIR /app
 
 COPY --chown=agent:agent --from=builder --chmod=700 /build/proxysql-agent /app/
-COPY --chown=agent:agent --from=builder --chmod=600 /build/example_config.yaml /app/config.yaml
+COPY --chown=agent:agent --from=builder --chmod=600 /build/configs/example_config.yaml /app/config.yaml
 
 USER agent
 

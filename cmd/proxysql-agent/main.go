@@ -4,18 +4,23 @@ import (
 	"log/slog"
 	"os"
 	"time"
+
+	"github.com/kuzmik/proxysql-agent/internal/configuration"
+	"github.com/kuzmik/proxysql-agent/internal/proxysql"
+	"github.com/kuzmik/proxysql-agent/internal/restapi"
 )
 
 var (
-	version   = ""
-	build     = ""
-	builddate = ""
+	version   = "" //nolint:gochecknoglobals
+	build     = "" //nolint:gochecknoglobals
+	builddate = "" //nolint:gochecknoglobals
 )
 
 func main() {
-	settings, err := Configure()
+	settings, err := configuration.Configure()
 	if err != nil {
-		panic(err)
+		slog.Error("Error in Configure()", slog.Any("err", err))
+		os.Exit(1)
 	}
 
 	setupLogger(settings)
@@ -23,7 +28,7 @@ func main() {
 	slog.Info("build info", slog.Any("version", version), slog.Any("built", builddate), slog.Any("sha", build))
 
 	// if defined, pause before booting; this allows the proxysql pods to fully come up before the agent tries
-	// connecting. Sometimes the proxysql container takes a a few seconds to fully start. This is mainly only
+	// connecting. Sometimes the proxysql container takes a few seconds to fully start. This is mainly only
 	// an issue when booting into core or satellite mode; any other commands that might be run ad hoc should be
 	// fine
 	if settings.StartDelay > 0 {
@@ -31,7 +36,7 @@ func main() {
 		time.Sleep(time.Duration(settings.StartDelay) * time.Second)
 	}
 
-	var psql *ProxySQL
+	var psql *proxysql.ProxySQL
 
 	psql, err = psql.New(settings)
 	if err != nil {
@@ -43,10 +48,10 @@ func main() {
 	// so it will block the process from exiting
 	switch settings.RunMode {
 	case "core":
-		go StartAPI(psql) // start the http api
+		go restapi.StartAPI(psql) // start the http api
 		psql.Core()
 	case "satellite":
-		go StartAPI(psql) // start the http api
+		go restapi.StartAPI(psql) // start the http api
 		psql.Satellite()
 	case "dump":
 		psql.DumpData()
@@ -55,10 +60,10 @@ func main() {
 	}
 }
 
-func setupLogger(settings *config) {
+func setupLogger(settings *configuration.Config) {
 	var level slog.Level
 
-	switch settings.LogLevel {
+	switch settings.Log.Level {
 	case "DEBUG":
 		level = slog.LevelDebug
 	case "INFO":
@@ -77,9 +82,9 @@ func setupLogger(settings *config) {
 	}
 
 	var handler slog.Handler = slog.NewTextHandler(os.Stdout, opts)
-	// if appEnv == "production" {
-	//     handler = slog.NewJSONHandler(os.Stdout, opts)
-	// }
+	if settings.Log.Format == "JSON" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	}
 
 	logger := slog.New(handler)
 

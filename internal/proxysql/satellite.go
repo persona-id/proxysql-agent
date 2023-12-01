@@ -1,82 +1,14 @@
-package main
+package proxysql
 
 import (
-	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
-
-type ProxySQL struct {
-	conn     *sql.DB
-	settings *config
-}
-
-func (p *ProxySQL) New(configs *config) (*ProxySQL, error) {
-	settings := configs
-	address := settings.ProxySQL.Address
-	username := settings.ProxySQL.Username
-	password := settings.ProxySQL.Password
-
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/", username, password, address)
-
-	conn, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	err = conn.Ping()
-	if err != nil {
-		return nil, err
-	}
-
-	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
-
-	return &ProxySQL{conn, settings}, nil
-}
-
-func (p *ProxySQL) Ping() error {
-	return p.conn.Ping()
-}
-
-func (p *ProxySQL) GetBackends() (map[string]int, error) {
-	entries := make(map[string]int)
-
-	rows, err := p.conn.Query("SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id")
-	if err != nil {
-		return nil, err
-	}
-
-	defer rows.Close()
-
-	for rows.Next() {
-		var hostgroup, port int
-		var hostname string
-
-		err := rows.Scan(&hostgroup, &hostname, &port)
-		if err != nil {
-			return nil, err
-		}
-
-		entries[hostname] = hostgroup
-		if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
-			return nil, rows.Err()
-		}
-	}
-
-	return entries, nil
-}
 
 //
 // Satellite mode specific functons
@@ -146,7 +78,7 @@ func (p *ProxySQL) SatelliteResync() error {
 //  2. mysql_query_rules
 //  3. stats_mysql_query_rules
 //
-// FIXME: all these functions dump to /tmp//XXXX/Y.csv; we want the directory to be configurable at least.
+// FIXME: all these functions dump to /tmp/XXXX/Y.csv; we want the directory to be configurable at least.
 func (p *ProxySQL) DumpData() {
 	tmpdir, _ := os.MkdirTemp("/tmp", "")
 
@@ -175,8 +107,8 @@ func (p *ProxySQL) DumpData() {
 // ProxySQL docs: https://proxysql.com/documentation/stats-statistics/#stats_mysql_query_digest
 func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	var rowCount int
-	err := p.conn.QueryRow("SELECT COUNT(*) FROM stats_mysql_query_digest").Scan(&rowCount)
 
+	err := p.conn.QueryRow("SELECT COUNT(*) FROM stats_mysql_query_digest").Scan(&rowCount)
 	if err != nil {
 		return "", err
 	}
@@ -199,8 +131,8 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	}
 
 	dumpFile := fmt.Sprintf("%s/%s-digests.csv", tmpdir, hostname)
-	file, err := os.Create(dumpFile)
 
+	file, err := os.Create(dumpFile)
 	if err != nil {
 		return "", err
 	}
@@ -234,11 +166,14 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	defer rows.Close()
 
 	for rows.Next() {
 		var hostgroup int
+
 		var schemaname, username, clientAddress, digest, digestText string
+
 		var countStar, firstSeen, lastSeen, sumTime, minTime, maxTime, sumRowsAffected, sumRowsSent int
 
 		err := rows.Scan(&hostgroup, &schemaname, &username, &clientAddress, &digest, &digestText, &countStar,
@@ -280,7 +215,6 @@ func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM mysql_query_rules").Scan(&rowCount)
 	if err != nil {
-
 		return "", err
 	}
 
@@ -365,6 +299,7 @@ func (p *ProxySQL) DumpQueryRules(tmpdir string) (string, error) {
 		var ruleID, active, flagIN, proxyPort, negateMatchPattern, flagOUT, destinationHostgroup, cacheTTL,
 			cacheEmptyResult, cacheTimeout, reconnect, timeout, retries, delay, nextQueryFlagIN, mirrorFlagOUT,
 			mirrorHostgroup, stickyConn, multiplex, gtidFromHostgroup, log, apply sql.NullInt64
+
 		var username, schemaname, clientAddr, proxyAddr, digest, matchDigest, matchPattern, reModifiers,
 			replacePatternStr, errorMsg, okMsg, attributes, comment sql.NullString
 
@@ -495,260 +430,4 @@ func (p *ProxySQL) DumpQueryRuleStats(tmpdir string) (string, error) {
 	}
 
 	return dumpFile, nil
-}
-
-//
-// Core mode specific settings
-//
-
-type PodInfo struct {
-	PodIP    string
-	Hostname string
-	UID      string
-}
-
-// Define a custom type to implement the Sort interface.
-type ByPodIP []PodInfo
-
-func (a ByPodIP) Len() int           { return len(a) }
-func (a ByPodIP) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByPodIP) Less(i, j int) bool { return a[i].PodIP < a[j].PodIP }
-
-func (p *ProxySQL) Core() {
-	interval := p.settings.Core.Interval
-
-	slog.Info("Core mode initialized, running loop", slog.Int("interval", interval))
-
-	for {
-		p.coreLoop()
-
-		time.Sleep(time.Duration(interval) * time.Second)
-	}
-}
-
-func (p *ProxySQL) coreLoop() {
-	pods, err := GetCorePods(p.settings)
-	if err != nil {
-		slog.Error("Failed to get pod info", slog.Any("error", err))
-
-		return
-	}
-
-	if len(pods) == 0 {
-		slog.Error("No pods returned")
-
-		return
-	}
-
-	checksumFile := "/tmp/pods-cs.txt"
-	digest := calculateChecksum(pods)
-
-	// Read the previous checksum from the file
-	old, err := os.ReadFile(checksumFile)
-	if err != nil {
-		old = []byte("")
-	}
-
-	// If nothing changes, we still run LOAD PROXYSQL SERVERS TO RUNTIME in order to accept any
-	// new pods that have joined the cluster
-	if string(old) == digest {
-		command := "LOAD PROXYSQL SERVERS TO RUNTIME"
-
-		_, err = p.conn.Exec(command)
-		if err != nil {
-			slog.Error("Command failed to execute", slog.String("command", command), slog.Any("error", err))
-		}
-
-		return
-	}
-
-	commands := createCommands(pods)
-	for _, command := range commands {
-		_, err = p.conn.Exec(command)
-		if err != nil {
-			slog.Error("Commands failed", slog.String("commands", command), slog.Any("error", err))
-		}
-	}
-
-	// Write the new checksum to the file for the next run
-	err = os.WriteFile(checksumFile, []byte(digest), 0o600)
-	if err != nil {
-		slog.Error("Failed to write to checksum file", slog.String("file", checksumFile), slog.Any("error", err))
-	}
-
-	slog.Info("Commands ran", slog.String("commands", strings.Join(commands, "; ")))
-}
-
-func GetCorePods(settings *config) ([]PodInfo, error) {
-	app := settings.Core.PodSelector.App
-	component := settings.Core.PodSelector.Component
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	pods, _ := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app=%s,component=%s", app, component),
-	})
-
-	var corePods []PodInfo
-	for _, pod := range pods.Items {
-		corePods = append(corePods, PodInfo{PodIP: pod.Status.PodIP, Hostname: pod.Name, UID: string(pod.GetUID())})
-	}
-
-	return corePods, err
-}
-
-func calculateChecksum(pods []PodInfo) string {
-	data := []string{}
-
-	for _, pod := range pods {
-		data = append(data, fmt.Sprintf("%s:%s:%s", pod.PodIP, pod.Hostname, pod.UID))
-	}
-
-	sort.Strings(data)
-
-	return fmt.Sprintf("%x", data)
-}
-
-func createCommands(pods []PodInfo) []string {
-	sort.Sort(ByPodIP(pods))
-
-	commands := []string{"DELETE FROM proxysql_servers"}
-
-	for _, pod := range pods {
-		commands = append(commands,
-			fmt.Sprintf("INSERT INTO proxysql_servers VALUES ('%s', 6032, 0, '%s')", pod.PodIP, pod.Hostname),
-		)
-	}
-
-	commands = append(commands,
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	)
-
-	return commands
-}
-
-// k8s probes
-
-type ProbeResult struct {
-	Status   string `json:"status,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Clients  int    `json:"clients,omitempty"`
-	Draining bool   `json:"draining,omitempty"`
-	Probe    string `json:"probe,omitempty"`
-	Backends struct {
-		Total  int `json:"total,omitempty"`
-		Online int `json:"online,omitempty"`
-	} `json:"backends,omitempty"`
-}
-
-func (p *ProxySQL) RunProbes() (ProbeResult, error) {
-	total, online, err := p.probeBackends()
-	if err != nil {
-		return ProbeResult{}, err
-	}
-
-	clients, err := p.probeClients()
-	if err != nil {
-		return ProbeResult{}, err
-	}
-
-	results := ProbeResult{
-		Clients:  clients,
-		Draining: probeDraining(),
-	}
-
-	results.Backends.Total = total
-	results.Backends.Online = online
-
-	return processResults(results), nil
-}
-
-func processResults(results ProbeResult) ProbeResult {
-	if results.Backends.Online == results.Backends.Total {
-		// all backends are up and running, we're totally healthy
-		results.Status = "ok"
-		results.Message = "all backends online"
-	} else if results.Backends.Online > 0 {
-		// some backends are offline in some way, so while we're healthy, it's not perfect
-		results.Status = "ok"
-		results.Message = "some backends offline"
-	} else {
-		// all backends are offline in some way
-		results.Status = "unhealthy"
-		results.Message = "all backends offline"
-	}
-
-	if results.Draining {
-		results.Status = "draining"
-		results.Message = "draining traffic"
-	}
-
-	return results
-}
-
-func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
-	var total, online int
-
-	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
-	if err != nil {
-		return -1, -1, err
-	}
-
-	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
-	if err != nil {
-		return -1, -1, err
-	}
-
-	return online, total, nil
-}
-
-func (p *ProxySQL) probeClients() (int /* clients connected */, error) {
-	var online sql.NullInt32
-
-	// this one doesnt appear to do what we want
-	// query := "SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1"
-
-	query := "select sum(ConnUsed) from stats_mysql_connection_pool"
-	err := p.conn.QueryRow(query).Scan(&online)
-	if err != nil {
-		return -1, err
-	}
-
-	if online.Valid {
-		return int(online.Int32), nil
-	} else {
-		return -1, nil
-	}
-}
-
-// if the file /tmp/draining exists, we're in maint mode or draining traffic
-// for a shutdown, and should return unhealthy.
-func probeDraining() bool {
-	// FIXME: make this configurable?
-	filename := "/var/lib/proxysql/draining"
-
-	_, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		// err for file doesnt exist, which means we're not draining
-		return false
-	} else if err != nil {
-		// random other error, not sure how to deal with that right now
-		return false
-	} else {
-		// file exists, we're draining traffic or in maint mode
-		return true
-	}
 }

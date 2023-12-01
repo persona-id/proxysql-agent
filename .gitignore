@@ -2,13 +2,12 @@
 go.work
 
 # Binaries for programs and plugins
+/proxysql-agent
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-proxysql-agent
 
 # Test binary, built with `go test -c`
 *.test
