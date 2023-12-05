@@ -1,6 +1,7 @@
 # ProxySQL Agent
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/kuzmik/proxysql-agent)](https://goreportcard.com/report/github.com/kuzmik/proxysql-agent)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fkuzmik%2Fproxysql-agent.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fkuzmik%2Fproxysql-agent?ref=badge_shield)
 
 ## About
 
@@ -105,3 +106,7 @@ Misc:
 
 * Look into possibly using [nacelle](https://www.nacelle.dev/docs/topics/overview/) down the road
 * Some leader election examples: [golang-k8s-leader-example](https://github.com/mjasion/golang-k8s-leader-example)
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fkuzmik%2Fproxysql-agent.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fkuzmik%2Fproxysql-agent?ref=badge_large)
