@@ -1,4 +1,4 @@
-package main
+package restapi
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/kuzmik/proxysql-agent/internal/proxysql"
 )
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.
@@ -16,7 +18,7 @@ import (
 // If the probes fail, it returns a 503 Service Unavailable status code.
 // If the probes pass, it returns a 200 OK status code.
 // The livenessHandler also logs the status check result for debugging purposes.
-func livenessHandler(psql *ProxySQL) http.HandlerFunc {
+func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -28,6 +30,7 @@ func livenessHandler(psql *ProxySQL) http.HandlerFunc {
 
 			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprint(w, err)
+
 			return
 		}
 
@@ -74,7 +77,7 @@ func livenessHandler(psql *ProxySQL) http.HandlerFunc {
 // The main caveat here is we'd need the right username, which is apparently hashed in the proxysql db now. I did confirm
 // that even if a backend is offline, connections to proxysql are accepted; in other words, unless proxysql is paused
 // connections to the serving port with the right creds will succeed.
-func readinessHandler(psql *ProxySQL) http.HandlerFunc {
+func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -86,6 +89,7 @@ func readinessHandler(psql *ProxySQL) http.HandlerFunc {
 
 			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprint(w, err)
+
 			return
 		}
 
@@ -116,7 +120,7 @@ func readinessHandler(psql *ProxySQL) http.HandlerFunc {
 // unhealthy if there are missing backends. We just want to ensure that proxysql
 // is up and listening. This also has the _intended_ side effect of ensuring that
 // the mysql connection to the admin port is open.
-func startupHandler(psql *ProxySQL) http.HandlerFunc {
+func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -138,9 +142,9 @@ func startupHandler(psql *ProxySQL) http.HandlerFunc {
 	}
 }
 
-func preStopHandler(p *ProxySQL) http.HandlerFunc {
+func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		//FIXME: make these configurable
+		// FIXME: make these configurable
 		shutdownDelay := 120
 		hasCSP := false
 		drainFile := "/var/lib/proxysql/draining"
@@ -152,16 +156,19 @@ func preStopHandler(p *ProxySQL) http.HandlerFunc {
 			slog.Error("Error creating drainFile", slog.String("path", drainFile), slog.Any("err", err))
 		}
 
+		// the settings in the proxysql variables are all in ms, so convert shutdownDelay over to MS
+		timeouts := shutdownDelay * int(time.Millisecond)
+
 		// disable new connections
 		commands := []string{
-			fmt.Sprintf("UPDATE global_variables SET variable_value = %d WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time')", (shutdownDelay * 1000)),
+			fmt.Sprintf("UPDATE global_variables SET variable_value = %d WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time')", timeouts),
 			"UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'",
 			"LOAD MYSQL VARIABLES TO RUNTIME",
 			"PROXYSQL PAUSE;",
 		}
 
 		for _, command := range commands {
-			_, err = p.conn.Exec(command)
+			_, err = psql.Conn().Exec(command)
 			if err != nil {
 				slog.Error("Command failed", slog.String("commands", command), slog.Any("error", err))
 			}
@@ -170,7 +177,7 @@ func preStopHandler(p *ProxySQL) http.HandlerFunc {
 		slog.Info("Pre-stop commands ran", slog.String("commands", strings.Join(commands, "; ")))
 
 		for {
-			if safeToTerminate(p) {
+			if safeToTerminate(psql) {
 				slog.Info("No connected clients remaining, proceeding with shutdown")
 				break
 			}
@@ -179,7 +186,7 @@ func preStopHandler(p *ProxySQL) http.HandlerFunc {
 		}
 
 		// issue the PROXYSQL KILL command
-		_, err = p.conn.Exec("PROXYSQL KILL")
+		_, err = psql.Conn().Exec("PROXYSQL KILL")
 		if err != nil {
 			slog.Error("KILL command failed", slog.String("commands", "PROXYSQL KILL"), slog.Any("error", err))
 		}
@@ -202,9 +209,9 @@ func preStopHandler(p *ProxySQL) http.HandlerFunc {
 	}
 }
 
-func safeToTerminate(p *ProxySQL) bool {
+func safeToTerminate(psql *proxysql.ProxySQL) bool {
 	// check for connected clients, and when it hits 0 return true
-	clients, err := p.probeClients()
+	clients, err := psql.ProbeClients()
 	if err != nil {
 		slog.Error("Error in probeClients()", slog.Any("err", err))
 	}
@@ -241,7 +248,7 @@ func killCSP() error {
 // StartAPI starts the HTTP server for the ProxySQL agent.
 // It registers the necessary handlers for health checks and starts listening on the specified port.
 // The function panics if there is an error starting the server.
-func StartAPI(p *ProxySQL) {
+func StartAPI(p *proxysql.ProxySQL) {
 	http.HandleFunc("/healthz/started", startupHandler(p))
 	http.HandleFunc("/healthz/ready", readinessHandler(p))
 	http.HandleFunc("/healthz/live", livenessHandler(p))

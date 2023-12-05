@@ -1,4 +1,4 @@
-package main
+package configuration
 
 import (
 	"fmt"
@@ -10,9 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+//nolint:gochecknoglobals
 var testConfigFile = []byte(`
 start_delay: 30
-log_level: "TRACE"
+log:
+  level: "TRACE"
+  format: "text"
 run_mode: core
 proxysql:
   address: "proxysql.vip:6032"
@@ -32,7 +35,9 @@ func TestValidations(t *testing.T) {
 	pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
 	viper.Reset()
+
 	_, err := Configure()
+
 	assert.NoError(t, err, "Configuration should not return an error")
 
 	t.Run("validate run_mode", func(t *testing.T) {
@@ -88,9 +93,10 @@ func TestDefaults(t *testing.T) {
 	pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
 	viper.Reset()
-	defaultsConfig, err := Configure()
-	assert.NoError(t, err, "Configuration should not return an error")
 
+	defaultsConfig, err := Configure()
+
+	assert.NoError(t, err, "Configuration should not return an error")
 	assert.Equal(t, 10, defaultsConfig.Satellite.Interval)
 }
 
@@ -103,7 +109,9 @@ func TestConfigFile(t *testing.T) {
 	})
 
 	viper.Reset()
+
 	_, err = tmpfile.Write(testConfigFile)
+
 	assert.NoError(t, err)
 	tmpfile.Close()
 
@@ -117,7 +125,7 @@ func TestConfigFile(t *testing.T) {
 	assert.NoError(t, err, "Configuration should not return an error")
 
 	assert.Equal(t, 30, fileConfig.StartDelay)
-	assert.Equal(t, "TRACE", fileConfig.LogLevel)
+	assert.Equal(t, "TRACE", fileConfig.Log.Level)
 	assert.Equal(t, "core", fileConfig.RunMode)
 
 	assert.Equal(t, "proxysql.vip:6032", fileConfig.ProxySQL.Address)
@@ -145,11 +153,14 @@ func TestEnvironment(t *testing.T) {
 	pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
 	viper.Reset()
+
 	envConfig, err := Configure()
+
 	assert.NoError(t, err, "Configuration should not return an error")
 
 	assert.Equal(t, 500, envConfig.StartDelay)
-	assert.Equal(t, "WARN", envConfig.LogLevel)
+	assert.Equal(t, "WARN", envConfig.Log.Level)
+	assert.Equal(t, "text", envConfig.Log.Format)
 	assert.Equal(t, "satellite", envConfig.RunMode)
 
 	assert.Equal(t, "proxysql:6666", envConfig.ProxySQL.Address)
@@ -166,7 +177,8 @@ func TestFlags(t *testing.T) {
 	os.Args = []string{
 		"cmd",
 		"--start_delay=415",
-		"--log_level=ERROR",
+		"--log.level=ERROR",
+		"--log.format=text",
 		"--run_mode=core",
 		"--proxysql.address=86.75.30.9:9999",
 		"--proxysql.username=nick",
@@ -179,11 +191,14 @@ func TestFlags(t *testing.T) {
 	pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
 	viper.Reset()
+
 	envConfig, err := Configure()
+
 	assert.NoError(t, err, "Configuration should not return an error")
 
 	assert.Equal(t, 415, envConfig.StartDelay)
-	assert.Equal(t, "ERROR", envConfig.LogLevel)
+	assert.Equal(t, "ERROR", envConfig.Log.Level)
+	assert.Equal(t, "text", envConfig.Log.Format)
 	assert.Equal(t, "core", envConfig.RunMode)
 
 	assert.Equal(t, "86.75.30.9:9999", envConfig.ProxySQL.Address)
@@ -204,7 +219,9 @@ func TestPrecedence(t *testing.T) {
 	t.Cleanup(func() {
 		os.Remove(tmpfile.Name())
 	})
+
 	_, err = tmpfile.Write(testConfigFile)
+
 	assert.NoError(t, err)
 	tmpfile.Close()
 
@@ -222,7 +239,7 @@ func TestPrecedence(t *testing.T) {
 		os.Args = []string{"cmd"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
-		var configs *config
+		var configs *Config
 		configs, err = Configure()
 		assert.NoError(t, err, "Configuration should not return an error")
 
@@ -241,7 +258,7 @@ func TestPrecedence(t *testing.T) {
 		os.Args = []string{"cmd", "--core.podselector.component=flagtest"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
-		var configs *config
+		var configs *Config
 		configs, err = Configure()
 		assert.NoError(t, err, "Configuration should not return an error")
 
