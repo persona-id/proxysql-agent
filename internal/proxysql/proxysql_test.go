@@ -26,6 +26,7 @@ var tmpConfig = &configuration.Config{
 	Core: struct {
 		Interval    int `mapstructure:"interval"`
 		PodSelector struct {
+			Namespace string `mapstructure:"namespace"`
 			App       string `mapstructure:"app"`
 			Component string `mapstructure:"component"`
 		} "mapstructure:\"podselector\""

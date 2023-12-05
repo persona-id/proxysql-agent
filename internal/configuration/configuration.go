@@ -29,6 +29,7 @@ type Config struct {
 	Core struct {
 		Interval    int `mapstructure:"interval"`
 		PodSelector struct {
+			Namespace string `mapstructure:"namespace"`
 			App       string `mapstructure:"app"`
 			Component string `mapstructure:"component"`
 		} `mapstructure:"podselector"`
@@ -66,6 +67,7 @@ func Configure() (*Config, error) {
 	viper.GetViper().SetDefault("proxysql.password", "")
 
 	viper.GetViper().SetDefault("core.interval", 10)
+	viper.GetViper().SetDefault("core.podselector.namespace", "proxysql")
 	viper.GetViper().SetDefault("core.podselector.app", "proxysql")
 	viper.GetViper().SetDefault("core.podselector.component", "core")
 
@@ -102,6 +104,7 @@ func Configure() (*Config, error) {
 
 	pflag.Int("core.interval", 10, "seconds to sleep in the core clustering loop")
 	pflag.String("core.checksum_file", "/tmp/pods-cs.txt", "path to the pods checksum file")
+	pflag.String("core.podselector.namespace", "proxysql", "namespace to use in the k8s pod selector label")
 	pflag.String("core.podselector.app", "proxysql", "app to use in the k8s pod selector label")
 	pflag.String("core.podselector.component", "core", "component to use in the k8s pod selector label")
 

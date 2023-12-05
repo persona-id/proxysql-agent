@@ -100,6 +100,7 @@ func (p *ProxySQL) coreLoop() {
 func GetCorePods(settings *configuration.Config) ([]PodInfo, error) {
 	app := settings.Core.PodSelector.App
 	component := settings.Core.PodSelector.Component
+	namespace := settings.Core.PodSelector.Namespace
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -111,7 +112,7 @@ func GetCorePods(settings *configuration.Config) ([]PodInfo, error) {
 		return nil, err
 	}
 
-	pods, _ := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
+	pods, _ := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("app=%s,component=%s", app, component),
 	})
 
