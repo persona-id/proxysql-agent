@@ -1,4 +1,4 @@
-package main
+package configuration
 
 import (
 	"errors"
@@ -10,10 +10,13 @@ import (
 	"github.com/spf13/viper"
 )
 
-type config struct {
+type Config struct {
 	StartDelay int `mapstructure:"start_delay"`
 
-	LogLevel string `mapstructure:"log_level"`
+	Log struct {
+		Level  string `mapstructure:"level"`
+		Format string `mapstructure:"format"`
+	} `mapstructure:"log"`
 
 	ProxySQL struct {
 		Address  string `mapstructure:"address"`
@@ -43,7 +46,7 @@ type config struct {
 //  2. config file
 //  3. ENV variables
 //  4. commandline flags
-func Configure() (*config, error) {
+func Configure() (*Config, error) {
 	// set up some ENV settings
 	// the replacer lets us access nested configs, like PROXYSQL_ADDRESS will equate to proxysql.address
 	replacer := strings.NewReplacer(".", "_")
@@ -53,7 +56,8 @@ func Configure() (*config, error) {
 
 	// set some defaults
 	viper.GetViper().SetDefault("start_delay", 0)
-	viper.GetViper().SetDefault("log_level", "INFO")
+	viper.GetViper().SetDefault("log.level", "INFO")
+	viper.GetViper().SetDefault("log.format", "text")
 	viper.GetViper().SetDefault("run_mode", nil)
 
 	// use the dot notation to access nested values
@@ -80,14 +84,16 @@ func Configure() (*config, error) {
 
 	// read the config file, if it exists. if not, keep on truckin'
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		errVal := viper.ConfigFileNotFoundError{}
+		if ok := errors.As(err, &errVal); !ok {
 			return nil, err
 		}
 	}
 
 	// commandline flags
 	pflag.Int("start_delay", 0, "seconds to pause before starting agent")
-	pflag.String("log_level", "INFO", "the log level for the agent; defaults to INFO")
+	pflag.String("log.level", "INFO", "the log level for the agent; defaults to INFO")
+	pflag.String("log.format", "JSON", "Format of the logs; valid values: [JSON OR plain]")
 	pflag.String("run_mode", "", "mode to run the agent in; valid values: [core OR satellite]")
 
 	pflag.String("proxysql.address", "127.0.0.1:6032", "proxysql admin interface address")
@@ -141,7 +147,7 @@ func Configure() (*config, error) {
 		return nil, errors.New("satellite.interval cannot be < 0")
 	}
 
-	settings := &config{}
+	settings := &Config{}
 
 	err = viper.Unmarshal(&settings)
 	if err != nil {

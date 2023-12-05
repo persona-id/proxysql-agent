@@ -18,7 +18,7 @@ SRC=$(shell find . -type f -name '*.go')
 all: clean lint build
 
 $(TARGET): $(SRC)
-	@go build $(LDFLAGS) -o $(TARGET)
+	@go build $(LDFLAGS) -o $(TARGET) cmd/proxysql-agent/main.go
 
 build: clean $(TARGET)
 	@true
@@ -33,7 +33,7 @@ lint:
 
 test:
 	@mkdir -p coverage
-	@go test -v -shuffle=on -coverprofile coverage/coverage.out
+	@go test ./... -v -shuffle=on -coverprofile coverage/coverage.out
 
 coverage: test
 	@go tool cover -html=coverage/coverage.out

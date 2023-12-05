@@ -7,21 +7,43 @@ issues:
 linters:
   disable-all: true
   enable:
+    - goimports
+    - dupl
+    - dupword
     - durationcheck
     - errcheck
+    - errname
+    - errorlint
     - exportloopref
     - forcetypeassert
+    # - forbidigo
     - godot
+    - decorder
+    - gocritic
+    - goconst
+    - gochecknoglobals
+    # - godox
     - gofmt
+    - gofumpt
+    # - gomnd
     - gosimple
     - ineffassign
     - makezero
+    - nilnil
+    - musttag
     - misspell
     - nilerr
     - predeclared
     - staticcheck
+    - reassign
+    - revive
     - tenv
     - unconvert
     - unparam
+    - sloglint
     - unused
     - vet
+    # - testifylint
+    # - wrapcheck
+    - wsl
+    - whitespace
