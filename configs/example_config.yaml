@@ -42,6 +42,8 @@ core:
   #           component: core  
   podselector:
     # Defaults to proxysql
+    namespace: proxysql
+    # Defaults to proxysql
     app: proxysql
     # Defaults to core
     component: core

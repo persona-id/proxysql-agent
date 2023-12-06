@@ -24,6 +24,7 @@ proxysql:
 core:
   interval: 30
   podselector:
+    namespace: test-namespace
     app: test-application
     component: test-component
 satellite:
@@ -140,13 +141,15 @@ func TestConfigFile(t *testing.T) {
 
 func TestEnvironment(t *testing.T) {
 	t.Setenv("AGENT_START_DELAY", "500")
-	t.Setenv("AGENT_LOG_LEVEL", "WARN")
+	t.Setenv("AGENT_LOG_LEVEL", "env-WARN")
+	t.Setenv("AGENT_LOG_FORMAT", "env-text")
 	t.Setenv("AGENT_RUN_MODE", "satellite")
-	t.Setenv("AGENT_PROXYSQL_ADDRESS", "proxysql:6666")
-	t.Setenv("AGENT_PROXYSQL_USERNAME", "proxysql-user")
-	t.Setenv("AGENT_PROXYSQL_PASSWORD", "proxysql-password")
-	t.Setenv("AGENT_CORE_PODSELECTOR_APP", "proxysql-blue")
-	t.Setenv("AGENT_CORE_PODSELECTOR_COMPONENT", "proxysql-core")
+	t.Setenv("AGENT_PROXYSQL_ADDRESS", "env-proxysql:6666")
+	t.Setenv("AGENT_PROXYSQL_USERNAME", "env-proxysql-user")
+	t.Setenv("AGENT_PROXYSQL_PASSWORD", "env-proxysql-password")
+	t.Setenv("AGENT_CORE_PODSELECTOR_NAMESPACE", "env-proxysql-blue")
+	t.Setenv("AGENT_CORE_PODSELECTOR_APP", "env-proxysql-blue")
+	t.Setenv("AGENT_CORE_PODSELECTOR_COMPONENT", "env-proxysql-core")
 	t.Setenv("AGENT_SATELLITE_INTERVAL", "60")
 
 	os.Args = []string{"cmd"}
@@ -159,16 +162,17 @@ func TestEnvironment(t *testing.T) {
 	assert.NoError(t, err, "Configuration should not return an error")
 
 	assert.Equal(t, 500, envConfig.StartDelay)
-	assert.Equal(t, "WARN", envConfig.Log.Level)
-	assert.Equal(t, "text", envConfig.Log.Format)
+	assert.Equal(t, "env-WARN", envConfig.Log.Level)
+	assert.Equal(t, "env-text", envConfig.Log.Format)
 	assert.Equal(t, "satellite", envConfig.RunMode)
 
-	assert.Equal(t, "proxysql:6666", envConfig.ProxySQL.Address)
-	assert.Equal(t, "proxysql-user", envConfig.ProxySQL.Username)
-	assert.Equal(t, "proxysql-password", envConfig.ProxySQL.Password)
+	assert.Equal(t, "env-proxysql:6666", envConfig.ProxySQL.Address)
+	assert.Equal(t, "env-proxysql-user", envConfig.ProxySQL.Username)
+	assert.Equal(t, "env-proxysql-password", envConfig.ProxySQL.Password)
 
-	assert.Equal(t, "proxysql-blue", envConfig.Core.PodSelector.App)
-	assert.Equal(t, "proxysql-core", envConfig.Core.PodSelector.Component)
+	assert.Equal(t, "env-proxysql-blue", envConfig.Core.PodSelector.Namespace)
+	assert.Equal(t, "env-proxysql-blue", envConfig.Core.PodSelector.App)
+	assert.Equal(t, "env-proxysql-core", envConfig.Core.PodSelector.Component)
 
 	assert.Equal(t, 60, envConfig.Satellite.Interval)
 }
