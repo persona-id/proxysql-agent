@@ -3,6 +3,7 @@ go.work
 
 # Binaries for programs and plugins
 /proxysql-agent
+/dist
 *.exe
 *.exe~
 *.dll
