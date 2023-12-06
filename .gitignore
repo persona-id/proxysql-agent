@@ -16,3 +16,5 @@ go.work
 # test coverage output
 coverage
 tmp
+
+dist/

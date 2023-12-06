@@ -3,14 +3,9 @@ SHELL := /bin/bash
 # The name of the executable
 TARGET := 'proxysql-agent'
 
-# These will be provided to the target
-VERSION := 0.9.0
-BUILD_SHA := `git rev-parse --short HEAD`
-BUILD_TIME := `date +%FT%T%z`
-
 # Use linker flags to provide version/build settings to the target.
 # If we don't need debugging symbols, add -s and -w to make a smaller binary
-LDFLAGS=-ldflags "-s -w -X 'main.version=$(VERSION)' -X 'main.build=$(BUILD_SHA)' -X 'main.builddate=$(BUILD_TIME)'"
+LDFLAGS=-ldflags "-s -w"
 
 # go source files
 SRC=$(shell find . -type f -name '*.go')
