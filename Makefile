@@ -41,4 +41,4 @@ run: build
 	@./$(TARGET)
 
 docker: clean lint
-	@docker build --build-arg="VERSION=${VERSION}" --build-arg="BUILD_TIME=${BUILD_TIME}" --build-arg="BUILD_SHA=${BUILD_SHA}" -f build/Dockerfile . -t proxysql-agent
+	@docker build --build-arg="VERSION=${VERSION}" --build-arg="BUILD_TIME=${BUILD_TIME}" --build-arg="BUILD_SHA=${BUILD_SHA}" -f build/dev.Dockerfile . -t proxysql-agent
