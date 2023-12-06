@@ -11,9 +11,9 @@ import (
 )
 
 var (
-	version   = "" //nolint:gochecknoglobals
-	build     = "" //nolint:gochecknoglobals
-	builddate = "" //nolint:gochecknoglobals
+	version = "dev"     //nolint:gochecknoglobals
+	commit  = "none"    //nolint:gochecknoglobals
+	date    = "unknown" //nolint:gochecknoglobals
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 
 	setupLogger(settings)
 
-	slog.Info("build info", slog.Any("version", version), slog.Any("built", builddate), slog.Any("sha", build))
+	slog.Info("build info", slog.Any("version", version), slog.Any("date", date), slog.Any("commit", commit))
 
 	// if defined, pause before booting; this allows the proxysql pods to fully come up before the agent tries
 	// connecting. Sometimes the proxysql container takes a few seconds to fully start. This is mainly only
