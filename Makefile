@@ -33,7 +33,7 @@ run: build
 	@./$(TARGET)
 
 docker: clean lint
-	@docker build -f build/dev.Dockerfile . -t kuzmik/proxysql-agent:latest
+	@docker build -f build/dev.Dockerfile . -t persona-id/proxysql-agent:latest
 
 snapshot: clean lint
 	@goreleaser --snapshot --clean

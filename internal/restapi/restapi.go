@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kuzmik/proxysql-agent/internal/proxysql"
+	"github.com/persona-id/proxysql-agent/internal/proxysql"
 )
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.

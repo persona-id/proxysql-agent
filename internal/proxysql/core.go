@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kuzmik/proxysql-agent/internal/configuration"
+	"github.com/persona-id/proxysql-agent/internal/configuration"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"

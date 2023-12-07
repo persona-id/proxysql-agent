@@ -28,8 +28,8 @@ dockers:
     extra_files:
       - configs/config.yaml
     image_templates:
-      - "ghcr.io/kuzmik/{{.ProjectName}}:latest"
-      - "ghcr.io/kuzmik/{{.ProjectName}}:{{ .Tag }}"
+      - "ghcr.io/persona-id/{{.ProjectName}}:latest"
+      - "ghcr.io/persona-id/{{.ProjectName}}:{{ .Tag }}"
     skip_push: false
 
 builds:

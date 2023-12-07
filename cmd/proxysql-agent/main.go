@@ -7,9 +7,9 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/kuzmik/proxysql-agent/internal/configuration"
-	"github.com/kuzmik/proxysql-agent/internal/proxysql"
-	"github.com/kuzmik/proxysql-agent/internal/restapi"
+	"github.com/persona-id/proxysql-agent/internal/configuration"
+	"github.com/persona-id/proxysql-agent/internal/proxysql"
+	"github.com/persona-id/proxysql-agent/internal/restapi"
 )
 
 var (
