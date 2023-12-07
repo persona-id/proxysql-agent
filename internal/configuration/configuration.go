@@ -152,7 +152,7 @@ func Configure() (*Config, error) {
 
 	settings := &Config{}
 
-	err = viper.Unmarshal(&settings)
+	err = viper.Unmarshal(settings)
 	if err != nil {
 		return nil, err
 	}
