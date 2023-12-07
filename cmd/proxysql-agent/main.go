@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"runtime/debug"
@@ -34,8 +33,6 @@ func getVersionInfo() {
 		if kv.Value == "" {
 			continue
 		}
-
-		fmt.Println(kv)
 
 		switch kv.Key {
 		case "vcs.revision":
@@ -111,7 +108,7 @@ func setupLogger(settings *configuration.Config) {
 	}
 
 	opts := &slog.HandlerOptions{
-		AddSource: false,
+		AddSource: true,
 		Level:     level,
 	}
 
