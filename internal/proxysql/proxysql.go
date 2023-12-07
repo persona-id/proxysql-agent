@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/kuzmik/proxysql-agent/internal/configuration"
+	"github.com/persona-id/proxysql-agent/internal/configuration"
 
 	// Import the mysql driver functionality.
 	_ "github.com/go-sql-driver/mysql"

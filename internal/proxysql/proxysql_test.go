@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kuzmik/proxysql-agent/internal/configuration"
+	"github.com/persona-id/proxysql-agent/internal/configuration"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
