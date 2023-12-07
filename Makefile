@@ -3,28 +3,19 @@ SHELL := /bin/bash
 # The name of the executable
 TARGET := 'proxysql-agent'
 
-# These will be provided to the target
-VERSION := 0.9.0
-BUILD_SHA := `git rev-parse --short HEAD`
-BUILD_TIME := `date +%FT%T%z`
-
 # Use linker flags to provide version/build settings to the target.
-# If we don't need debugging symbols, add -s and -w to make a smaller binary
-LDFLAGS=-ldflags "-s -w -X 'main.version=$(VERSION)' -X 'main.build=$(BUILD_SHA)' -X 'main.builddate=$(BUILD_TIME)'"
-
-# go source files
-SRC=$(shell find . -type f -name '*.go')
+LDFLAGS=-ldflags "-s -w"
 
 all: clean lint build
 
-$(TARGET): $(SRC)
+$(TARGET):
 	@go build $(LDFLAGS) -o $(TARGET) cmd/proxysql-agent/main.go
 
 build: clean $(TARGET)
 	@true
 
 clean:
-	@rm -rf $(TARGET) coverage tmp/*
+	@rm -rf $(TARGET) *.test *.out tmp/* coverage dist
 
 lint:
 	@gofmt -s -l -w .
@@ -38,12 +29,14 @@ test:
 coverage: test
 	@go tool cover -html=coverage/coverage.out
 
-# cross compile for linux
-linux: clean $(TARGET)
-	@GOOS="linux" GOARCH="amd64" go build $(LDFLAGS) -o $(TARGET) .
-
 run: build
 	@./$(TARGET)
 
 docker: clean lint
-	@docker build --build-arg="VERSION=${VERSION}" --build-arg="BUILD_TIME=${BUILD_TIME}" --build-arg="BUILD_SHA=${BUILD_SHA}" -f build/Dockerfile . -t proxysql-agent
+	@docker build -f build/dev.Dockerfile . -t kuzmik/proxysql-agent:latest
+
+snapshot: clean lint
+	@goreleaser --snapshot --clean
+
+release: clean lint
+	@goreleaser --clean

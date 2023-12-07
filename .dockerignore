@@ -1,10 +1,13 @@
+# Random directories we don't need in the iamge
 /.github
+/build
 /tmp
 
 # artifacts of building/testing
-*.so
+/dist
 /coverage
 /proxysql-agent
+*.so
 
 # docs don't need to be in the image
 /docs

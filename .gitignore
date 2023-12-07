@@ -3,16 +3,17 @@ go.work
 
 # Binaries for programs and plugins
 /proxysql-agent
+/dist
 *.exe
 *.exe~
 *.dll
-*.so
 *.dylib
+*.so
 
 # Test binary, built with `go test -c`
-*.test
 *.out
+*.test
 
-# test coverage output
-coverage
-tmp
+# Test coverage output and a temp directory
+/coverage
+/tmp

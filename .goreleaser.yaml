@@ -1,0 +1,57 @@
+project_name: proxysql-agent
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+archives:
+  - builds_info:
+      group: root
+      owner: root
+    files:
+      - src: configs/config.yaml
+        strip_parent: true
+    format: tar.gz
+    # this name template makes the OS and Arch compatible with the results of uname.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    wrap_in_directory: true
+
+dockers:
+  - dockerfile: build/Dockerfile
+    extra_files:
+      - configs/config.yaml
+    image_templates:
+      - "ghcr.io/kuzmik/{{.ProjectName}}:latest"
+      - "ghcr.io/kuzmik/{{.ProjectName}}:{{ .Tag }}"
+    skip_push: false
+
+builds:
+  - main: ./cmd/proxysql-agent/main.go
+    env:
+      - CGO_ENABLED=0
+      - GO111MODULE=on
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+report_sizes: true
