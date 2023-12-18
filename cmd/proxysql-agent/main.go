@@ -3,7 +3,6 @@ package main
 import (
 	"log/slog"
 	"os"
-	"runtime/debug"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
@@ -13,41 +12,16 @@ import (
 
 var (
 	// Version will be the version tag if the binary is built with "go install url/tool@version".
-	// If the binary is built some other way, it will be "(devel)".
-	Version = "unknown" //nolint:gochecknoglobals
-	// Revision is taken from the vcs.revision tag in Go 1.18+.
-	Revision = "unknown" //nolint:gochecknoglobals
-	// LastCommit is taken from the vcs.time tag in Go 1.18+.
-	LastCommit time.Time //nolint:gochecknoglobals
-	// DirtyBuild is taken from the vcs.modified tag in Go 1.18+.
-	DirtyBuild = true //nolint:gochecknoglobals
+	// See https://goreleaser.com/cookbooks/using-main.version/
+	// Current git tag.
+	version = "unknown" //nolint:gochecknoglobals
+	// Current git commit sha.
+	commit = "unknown" //nolint:gochecknoglobals
+	// Built at date.
+	date = "unknown" //nolint:gochecknoglobals
 )
 
-func getVersionInfo() {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
-
-	for _, kv := range info.Settings {
-		if kv.Value == "" {
-			continue
-		}
-
-		switch kv.Key {
-		case "vcs.revision":
-			Revision = kv.Value
-		case "vcs.time":
-			LastCommit, _ = time.Parse(time.RFC3339, kv.Value)
-		case "vcs.modified":
-			DirtyBuild = kv.Value == "true"
-		}
-	}
-}
-
 func main() {
-	getVersionInfo()
-
 	settings, err := configuration.Configure()
 	if err != nil {
 		slog.Error("Error in Configure()", slog.Any("err", err))
@@ -56,7 +30,7 @@ func main() {
 
 	setupLogger(settings)
 
-	slog.Info("build info", slog.Any("version", Version), slog.Any("committed", LastCommit), slog.Any("revision", Revision), slog.Any("dirty", DirtyBuild))
+	slog.Info("build info", slog.Any("version", version), slog.Any("committed", date), slog.Any("revision", commit))
 
 	// if defined, pause before booting; this allows the proxysql containers to fully come up before the agent tries
 	// connecting; sometimes the proxysql container can take a few seconds to fully start. This is mainly only
