@@ -17,7 +17,7 @@ func TestGetMissingCorePods(t *testing.T) {
 
 	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
 
-	proxy := &ProxySQL{db, tmpConfig}
+	proxy := &ProxySQL{db, tmpConfig, nil}
 
 	t.Run("no error", func(t *testing.T) {
 		expectedCount := 1
