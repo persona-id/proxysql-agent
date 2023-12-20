@@ -47,3 +47,7 @@ linters:
     # - wrapcheck
     - wsl
     - whitespace
+
+linters-settings:
+  goconst:
+    min-occurrences: 5

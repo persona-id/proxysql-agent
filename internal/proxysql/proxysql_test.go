@@ -46,7 +46,7 @@ func TestPing(t *testing.T) {
 	// FIXME: this doesn't exist now apparently, idk.
 	// mock.ExpectPing()
 
-	proxy := &ProxySQL{db, tmpConfig}
+	proxy := &ProxySQL{db, tmpConfig, nil}
 	err = proxy.Ping()
 
 	assert.NoError(t, err, "Ping() should not return an error")
@@ -60,7 +60,7 @@ func TestGetBackends(t *testing.T) {
 
 	defer db.Close()
 
-	proxy := &ProxySQL{db, tmpConfig}
+	proxy := &ProxySQL{db, tmpConfig, nil}
 
 	t.Run("no error", func(t *testing.T) {
 		expectedRows := sqlmock.NewRows([]string{"hostgroup_id", "hostname", "port"}).
