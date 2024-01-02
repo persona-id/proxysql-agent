@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/go-sql-driver/mysql v1.7.1
 	github.com/spf13/pflag v1.0.5
-	github.com/spf13/viper v1.18.1
+	github.com/spf13/viper v1.18.2
 	k8s.io/apimachinery v0.29.0
 	k8s.io/client-go v0.29.0
 )
