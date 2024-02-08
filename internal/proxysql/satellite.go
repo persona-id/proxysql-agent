@@ -11,7 +11,7 @@ import (
 )
 
 //
-// Satellite mode specific functions
+// Satellite mode specific functons
 //
 
 func (p *ProxySQL) Satellite() {
