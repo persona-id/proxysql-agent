@@ -19,7 +19,7 @@ import (
 // If the probes pass, it returns a 200 OK status code.
 // The livenessHandler also logs the status check result for debugging purposes.
 func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		results, err := psql.RunProbes()
@@ -78,7 +78,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // that even if a backend is offline, connections to proxysql are accepted; in other words, unless proxysql is paused
 // connections to the serving port with the right creds will succeed.
 func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		results, err := psql.RunProbes()
@@ -121,7 +121,7 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // is up and listening. This also has the _intended_ side effect of ensuring that
 // the mysql connection to the admin port is open.
 func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		err := psql.Ping()
@@ -143,7 +143,7 @@ func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 }
 
 func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		// FIXME: make these configurable
 		shutdownDelay := 120
 		hasCSP := false

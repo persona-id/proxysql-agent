@@ -1,8 +1,8 @@
-## UNRELEASED
+## 1.1.0
 
 - More Go module updates
 - Switched to using an `Informer()` to notify the agent when core pods enter/leave the cluster, rather than running get commands every X seconds; it's now push rather than pull, in other words
-- Improved some of the tests
+- Improved some of the tests and expanded test coverage
 
 ## 1.0.0
 

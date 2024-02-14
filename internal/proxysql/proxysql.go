@@ -8,14 +8,16 @@ import (
 	"os"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
+	"k8s.io/client-go/kubernetes"
 
 	// Import the mysql driver functionality.
 	_ "github.com/go-sql-driver/mysql"
 )
 
 type ProxySQL struct {
-	conn     *sql.DB
-	settings *configuration.Config
+	conn      *sql.DB
+	settings  *configuration.Config
+	clientset kubernetes.Interface
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -38,7 +40,7 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
-	return &ProxySQL{conn, settings}, nil
+	return &ProxySQL{conn, settings, nil}, nil
 }
 
 func (p *ProxySQL) Conn() *sql.DB {
