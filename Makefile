@@ -24,7 +24,7 @@ lint:
 
 test:
 	@mkdir -p coverage
-	@go test ./... -v -shuffle=on -coverprofile coverage/coverage.out
+	@go test ./... --shuffle=on --coverprofile coverage/coverage.out
 
 coverage: test
 	@go tool cover -html=coverage/coverage.out
@@ -33,7 +33,7 @@ run: build
 	@./$(TARGET)
 
 docker: clean lint
-	@docker build -f build/dev.Dockerfile . -t persona-id/proxysql-agent:latest
+	@docker build -f build/dev.Dockerfile -t persona-id/proxysql-agent:latest .
 
 snapshot: clean lint
 	@goreleaser --snapshot --clean

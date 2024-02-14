@@ -33,6 +33,7 @@ satellite:
 
 func TestValidations(t *testing.T) {
 	os.Args = []string{"cmd"}
+
 	pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
 	viper.Reset()
@@ -50,6 +51,7 @@ func TestValidations(t *testing.T) {
 		}()
 
 		viper.Reset()
+
 		os.Args = []string{"cmd", "--run_mode=failure"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
@@ -60,6 +62,7 @@ func TestValidations(t *testing.T) {
 
 	t.Run("validate start_delay", func(t *testing.T) {
 		viper.Reset()
+
 		os.Args = []string{"cmd", "--start_delay=-1"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
@@ -70,6 +73,7 @@ func TestValidations(t *testing.T) {
 
 	t.Run("validate core.interval", func(t *testing.T) {
 		viper.Reset()
+
 		os.Args = []string{"cmd", "--core.interval=-1"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 
@@ -80,6 +84,7 @@ func TestValidations(t *testing.T) {
 
 	t.Run("validate satellite.interval", func(t *testing.T) {
 		viper.Reset()
+
 		os.Args = []string{"cmd", "--satellite.interval=-1"}
 		pflag.CommandLine = pflag.NewFlagSet("cmd", pflag.ContinueOnError)
 

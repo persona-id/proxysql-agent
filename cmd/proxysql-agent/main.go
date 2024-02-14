@@ -82,7 +82,7 @@ func setupLogger(settings *configuration.Config) {
 	}
 
 	opts := &slog.HandlerOptions{
-		AddSource: true,
+		AddSource: false,
 		Level:     level,
 	}
 
