@@ -125,7 +125,7 @@ func (p *ProxySQL) podAdded(object interface{}) {
 
 	err := p.conn.QueryRow(cmd).Scan(&count)
 	if err != nil {
-		slog.Error("Error in podAdded()", slog.Any("err", err))
+		slog.Error("Error in podAdded()", slog.String("command", cmd), slog.Any("err", err))
 	}
 
 	if count > 0 {
@@ -134,7 +134,7 @@ func (p *ProxySQL) podAdded(object interface{}) {
 
 	err = p.addPodToCluster(pod)
 	if err != nil {
-		slog.Error("Error in podAdded()", slog.Any("err", err))
+		slog.Error("Error in podAdded().addPodToCluster()", slog.Any("err", err))
 	}
 }
 
@@ -164,7 +164,7 @@ func (p *ProxySQL) podUpdated(oldobject interface{}, newobject interface{}) {
 	if oldpod.Status.Phase == "Pending" && newpod.Status.Phase == "Running" {
 		err := p.addPodToCluster(newpod)
 		if err != nil {
-			slog.Error("Error in addPod()", slog.Any("err", err))
+			slog.Error("Error in addPodToCluster()", slog.Any("err", err))
 		}
 	}
 
@@ -173,7 +173,7 @@ func (p *ProxySQL) podUpdated(oldobject interface{}, newobject interface{}) {
 	if oldpod.Status.Phase == "Running" && newpod.Status.Phase == "Failed" {
 		err := p.removePodFromCluster(oldpod)
 		if err != nil {
-			slog.Error("Error in removePod()", slog.Any("err", err))
+			slog.Error("Error in removePodFromCluster()", slog.Any("err", err))
 		}
 	}
 }
@@ -205,7 +205,7 @@ func (p *ProxySQL) addPodToCluster(pod *v1.Pod) error {
 		_, err := p.conn.Exec(command)
 		if err != nil {
 			// FIXME: wrap error with extra info and return
-			slog.Error("Command failed", slog.String("command", command), slog.Any("error", err))
+			slog.Error("Command failed in addPodToCluster()", slog.String("command", command), slog.Any("error", err))
 			return err
 		}
 	}
@@ -239,7 +239,7 @@ func (p *ProxySQL) removePodFromCluster(pod *v1.Pod) error {
 	for _, command := range commands {
 		_, err := p.conn.Exec(command)
 		if err != nil {
-			slog.Error("Command failed", slog.Any("command", command), slog.Any("error", err))
+			slog.Error("Command failed in removePodFromCluster()", slog.Any("command", command), slog.Any("error", err))
 			return err
 		}
 	}
