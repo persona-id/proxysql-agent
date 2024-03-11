@@ -3,12 +3,14 @@ module github.com/persona-id/proxysql-agent
 go 1.21
 
 require (
-	github.com/go-sql-driver/mysql v1.7.1
+	github.com/go-sql-driver/mysql v1.8.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.18.2
 	k8s.io/apimachinery v0.29.2
 	k8s.io/client-go v0.29.2
 )
+
+require filippo.io/edwards25519 v1.1.0 // indirect
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
