@@ -7,46 +7,46 @@ issues:
 linters:
   disable-all: true
   enable:
-    - goimports
+    - copyloopvar
+    - decorder
     - dupl
     - dupword
     - durationcheck
     - errcheck
     - errname
     - errorlint
-    - exportloopref
     - forcetypeassert
     # - forbidigo
-    - godot
-    - decorder
-    - gocritic
-    - goconst
     - gochecknoglobals
+    - goconst
+    - gocritic
+    - godot
     # - godox
     - gofmt
     - gofumpt
+    - goimports
     # - gomnd
     - gosimple
+    - govet
     - ineffassign
     - makezero
-    - nilnil
-    - musttag
     - misspell
+    - musttag
     - nilerr
+    - nilnil
     - predeclared
-    - staticcheck
     - reassign
     - revive
+    - sloglint
+    - staticcheck
     - tenv
+    # - testifylint
     - unconvert
     - unparam
-    - sloglint
     - unused
-    - vet
-    # - testifylint
+    - whitespace
     # - wrapcheck
     - wsl
-    - whitespace
 
 linters-settings:
   goconst:
