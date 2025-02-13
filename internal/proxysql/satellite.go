@@ -145,6 +145,7 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 	header := []string{
 		"pod_name",
 		"hostgroup",
+		"schemaname",
 		"username",
 		"digest",
 		"digest_text",
