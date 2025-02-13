@@ -1,0 +1,9 @@
+{
+	"name": "Go",
+	"image": "mcr.microsoft.com/devcontainers/go:1-1.23-bookworm",
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/marcozac/devcontainer-features/gofumpt:1": {}
+	},
+	"remoteUser": "root"
+}
