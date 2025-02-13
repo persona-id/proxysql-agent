@@ -8,7 +8,6 @@ linters:
   disable-all: true
   enable:
     - copyloopvar
-    - decorder
     - dupl
     - dupword
     - durationcheck
@@ -17,10 +16,11 @@ linters:
     - errorlint
     - forcetypeassert
     # - forbidigo
-    - gochecknoglobals
-    - goconst
+    - decorder
     - gocritic
     - godot
+    - goconst
+    - gochecknoglobals
     # - godox
     - gofmt
     - gofumpt
@@ -30,23 +30,23 @@ linters:
     - govet
     - ineffassign
     - makezero
-    - misspell
-    - musttag
-    - nilerr
     - nilnil
+    - musttag
+    - misspell
+    - nilerr
     - predeclared
+    - staticcheck
     - reassign
     - revive
-    - sloglint
-    - staticcheck
     - tenv
-    # - testifylint
     - unconvert
     - unparam
+    - sloglint
     - unused
-    - whitespace
+    # - testifylint
     # - wrapcheck
     - wsl
+    - whitespace
 
 linters-settings:
   goconst:

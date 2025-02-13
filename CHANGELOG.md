@@ -1,3 +1,8 @@
+## 1.1.3
+
+- Basic devcontainers setup, will include more later
+- Go updated to 1.22.3 and updated all of the deps
+
 ## 1.1.0
 
 - More Go module updates
@@ -9,8 +14,7 @@
 - Go module updates, fixed a breaking change that Viper introduced
 - Followed some guides on go project layouts to redo the project layout
 - Enabled some extra golangci checks and addressed as many of the findings as possible
-- fix: add a configurable namespace to the core pod selector. We have several proxysql namespaces,
-  so being able to configure it at runtime is important
+- Add a configurable namespace to the core pod selector. We have several proxysql namespaces, so being able to configure it at runtime is important
 - Add goreleaser config and workflow
 - Added a config flag for logging format, defaults to json structured logs
 - Added restapi for proxysql healthcheck endpoints
