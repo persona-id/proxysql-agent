@@ -8,41 +8,73 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 )
 
 func TestGetMissingCorePods(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err, "Error creating mock database")
+	tests := []struct {
+		name          string
+		setupMock     func(mock sqlmock.Sqlmock)
+		expectedCount int
+		expectedErr   error
+	}{
+		{
+			name: "successful query",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+			},
+			expectedCount: 1,
+			expectedErr:   nil,
+		},
+		{
+			name: "database error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+				mock.ExpectQuery(query).WillReturnError(errors.New("database error"))
+			},
+			expectedCount: -1,
+			expectedErr:   errors.New("database error"),
+		},
+	}
 
-	defer db.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Error creating mock database: %v", err)
+			}
+			defer db.Close()
 
-	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+			proxy := &ProxySQL{db, newTestConfig(), nil}
 
-	proxy := &ProxySQL{db, tmpConfig, nil}
+			// Setup the mock
+			tt.setupMock(mock)
 
-	t.Run("no error", func(t *testing.T) {
-		expectedCount := 1
-		mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(expectedCount))
+			// Call the function being tested
+			count, err := proxy.GetMissingCorePods()
 
-		count, err := proxy.GetMissingCorePods()
-		assert.NoError(t, err, "GetMissingCorePods should not return an error")
+			// Check error
+			switch {
+			case tt.expectedErr == nil && err != nil:
+				t.Errorf("GetMissingCorePods() returned unexpected error: %v", err)
+			case tt.expectedErr != nil && err == nil:
+				t.Errorf("GetMissingCorePods() expected error: %v, got nil", tt.expectedErr)
+			case tt.expectedErr != nil && err != nil && tt.expectedErr.Error() != err.Error():
+				t.Errorf("GetMissingCorePods() expected error: %v, got: %v", tt.expectedErr, err)
+			}
 
-		assert.Equal(t, expectedCount, count, "Count should match the expected value")
-		assert.NoError(t, mock.ExpectationsWereMet(), "SQL expectations were not met")
-	})
+			// Check count
+			if count != tt.expectedCount {
+				t.Errorf("GetMissingCorePods() expected count: %v, got: %v", tt.expectedCount, count)
+			}
 
-	t.Run("returns error", func(t *testing.T) {
-		expectedError := errors.New("database error")
-		mock.ExpectQuery(query).WillReturnError(expectedError)
-
-		count, err := proxy.GetMissingCorePods()
-
-		assert.Equal(t, -1, count)
-		assert.EqualError(t, err, expectedError.Error(), "GetBackends should return the expected error")
-		assert.NoError(t, mock.ExpectationsWereMet(), "SQL expectations were not met")
-	})
+			// Verify all expectations were met
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations were not met: %v", err)
+			}
+		})
+	}
 }
 
 func TestSatelliteResync(t *testing.T) {
@@ -80,82 +112,103 @@ func TestSatelliteResync(t *testing.T) {
 }
 
 func TestDumpQueryRuleStats(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	tests := []struct {
+		name          string
+		setupMock     func(mock sqlmock.Sqlmock)
+		expectFile    bool
+		expectedLines []string
+	}{
+		{
+			name: "no stats",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"count"}).AddRow(0)
+				mock.ExpectQuery(
+					regexp.QuoteMeta("SELECT COUNT(*) FROM stats_mysql_query_rules"),
+				).WillReturnRows(rows)
+			},
+			expectFile:    false,
+			expectedLines: nil,
+		},
+		{
+			name: "has stats",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"count"}).AddRow(1)
+				mock.ExpectQuery(
+					regexp.QuoteMeta("SELECT COUNT(*) FROM stats_mysql_query_rules"),
+				).WillReturnRows(rows)
+
+				rows = sqlmock.NewRows([]string{"rule_id", "hits"}).AddRow(1, 100).AddRow(2, 200)
+				mock.ExpectQuery(
+					regexp.QuoteMeta("SELECT * FROM stats_mysql_query_rules"),
+				).WillReturnRows(rows)
+			},
+			expectFile: true,
+			expectedLines: []string{
+				"rule_id,hits",
+				"1,100",
+				"2,200",
+			},
+		},
 	}
-	defer db.Close()
 
-	tmpdir := os.TempDir()
-
-	p := &ProxySQL{conn: db}
-
-	// No stats in table, nothing is done.
-	t.Run("no stats", func(t *testing.T) {
-		rows := sqlmock.NewRows([]string{"count"}).AddRow(0)
-		mock.ExpectQuery(
-			regexp.QuoteMeta("SELECT COUNT(*) FROM stats_mysql_query_rules"),
-		).WillReturnRows(rows)
-
-		_, err := p.DumpQueryRuleStats(tmpdir)
-		if err != nil {
-			t.Errorf("Expected no error, but got %s instead", err)
-		}
-
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("there were unfulfilled expectations: %s", err)
-		}
-	})
-
-	// Has stats in table, so the file should have data
-	t.Run("has stats", func(t *testing.T) {
-		rows := sqlmock.NewRows([]string{"count"}).AddRow(1)
-		mock.ExpectQuery(
-			regexp.QuoteMeta("SELECT COUNT(*) FROM stats_mysql_query_rules"),
-		).WillReturnRows(rows)
-
-		rows = sqlmock.NewRows([]string{"rule_id", "hits"}).AddRow(1, 100).AddRow(2, 200)
-		mock.ExpectQuery(
-			regexp.QuoteMeta("SELECT * FROM stats_mysql_query_rules"),
-		).WillReturnRows(rows)
-
-		filePath, err := p.DumpQueryRuleStats(tmpdir)
-		if err != nil {
-			t.Errorf("Expected no error, but got %s instead", err)
-		}
-
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("there were unfulfilled expectations: %s", err)
-		}
-
-		// verify the file content
-		file, err := os.Open(filePath)
-		if err != nil {
-			t.Errorf("Expected file to be created, but got %s", err)
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		header := "rule_id,hits"
-
-		if scanner.Scan() {
-			if strings.TrimSpace(scanner.Text()) != header {
-				t.Errorf("Expected file header to be '%s', got '%s'", header, scanner.Text())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 			}
-		}
+			defer db.Close()
 
-		if scanner.Scan() {
-			line := "1,100"
-			if strings.TrimSpace(scanner.Text()) != line {
-				t.Errorf("Expected first line to be '%s', got '%s'", line, scanner.Text())
-			}
-		}
+			tmpdir := os.TempDir()
+			p := &ProxySQL{conn: db}
 
-		if scanner.Scan() {
-			line := "2,200"
-			if strings.TrimSpace(scanner.Text()) != line {
-				t.Errorf("Expected last line to be '%s', got '%s'", line, scanner.Text())
+			// Setup mock
+			tt.setupMock(mock)
+
+			// Call function being tested
+			filePath, err := p.DumpQueryRuleStats(tmpdir)
+			if err != nil {
+				t.Errorf("Expected no error, but got %s instead", err)
 			}
-		}
-	})
+
+			// Verify SQL expectations
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("there were unfulfilled expectations: %s", err)
+			}
+
+			// If file expected, verify contents
+			if tt.expectFile {
+				if filePath == "" {
+					t.Errorf("Expected a file path, but got empty string")
+				}
+
+				// verify the file content
+				file, err := os.Open(filePath)
+				if err != nil {
+					t.Errorf("Expected file to be created, but got %s", err)
+				}
+				defer file.Close()
+
+				scanner := bufio.NewScanner(file)
+				lineIndex := 0
+
+				for scanner.Scan() {
+					if lineIndex >= len(tt.expectedLines) {
+						t.Errorf("More lines in file than expected, got extra line: %s", scanner.Text())
+						break
+					}
+
+					if strings.TrimSpace(scanner.Text()) != tt.expectedLines[lineIndex] {
+						t.Errorf("Expected line %d to be '%s', got '%s'", lineIndex, tt.expectedLines[lineIndex], scanner.Text())
+					}
+
+					lineIndex++
+				}
+
+				if lineIndex < len(tt.expectedLines) {
+					t.Errorf("Expected %d lines in file, but got %d", len(tt.expectedLines), lineIndex)
+				}
+			}
+		})
+	}
 }

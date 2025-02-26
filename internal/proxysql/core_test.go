@@ -30,7 +30,7 @@ func TestPodUpdated(t *testing.T) {
 
 	mock.MatchExpectationsInOrder(true)
 
-	p := &ProxySQL{db, tmpConfig, nil}
+	p := &ProxySQL{db, newTestConfig(), nil}
 
 	oldpod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -124,7 +124,7 @@ func TestPodAdded(t *testing.T) {
 
 	mock.MatchExpectationsInOrder(true)
 
-	p := &ProxySQL{db, tmpConfig, nil}
+	p := &ProxySQL{db, newTestConfig(), nil}
 
 	// we have to do a little hostname trickery for this test, as podAdded will immediately return for any pods
 	// that aren't processing themselves.
@@ -201,7 +201,7 @@ func TestRemovePodFromCluster(t *testing.T) {
 
 	mock.MatchExpectationsInOrder(true)
 
-	p := &ProxySQL{db, tmpConfig, nil}
+	p := &ProxySQL{db, newTestConfig(), nil}
 
 	t.Run("core pod", func(t *testing.T) {
 		mock.ExpectExec(

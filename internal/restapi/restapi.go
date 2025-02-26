@@ -209,6 +209,8 @@ func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	}
 }
 
+// safeToTerminate checks if it is safe to terminate the ProxySQL instance.
+// It returns true if there are no connected clients, otherwise it returns false.
 func safeToTerminate(psql *proxysql.ProxySQL) bool {
 	// check for connected clients, and when it hits 0 return true
 	clients, err := psql.ProbeClients()
@@ -221,7 +223,6 @@ func safeToTerminate(psql *proxysql.ProxySQL) bool {
 	}
 
 	// maybe we should also return true if a specified amount of time has passed, in order to not let one rogue transaction hold us up.
-
 	return clients == 0
 }
 
