@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
+
+var ErrCacheTimeout = errors.New("timed out waiting for caches to sync")
 
 // ProxySQL core functions.
 //
@@ -83,13 +86,14 @@ func (p *ProxySQL) Core() {
 	go factory.Start(stopper)
 
 	if !cache.WaitForCacheSync(stopper, podInformer.HasSynced) {
-		runtime.HandleError(fmt.Errorf("Timed out waiting for caches to sync"))
+		runtime.HandleError(ErrCacheTimeout)
 		return
 	}
 
 	_, err := podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    p.podAdded,
 		UpdateFunc: p.podUpdated,
+		DeleteFunc: nil,
 	})
 	if err != nil {
 		slog.Error("Error creating Informer", slog.Any("err", err))
@@ -105,7 +109,7 @@ func (p *ProxySQL) Core() {
 // be handled via podUpdated.
 //
 // This feels a bit clumsy.
-func (p *ProxySQL) podAdded(object interface{}) {
+func (p *ProxySQL) podAdded(object any) {
 	pod, ok := object.(*v1.Pod)
 	if !ok {
 		return
@@ -113,7 +117,7 @@ func (p *ProxySQL) podAdded(object interface{}) {
 
 	// if the new pod is not THIS pod, bail out of this function. the rest of this function should only apply
 	// to the first core pod to come up in the cluster.
-	if hostname, _ := os.Hostname(); pod.Name != hostname {
+	if hostname, osErr := os.Hostname(); osErr != nil || pod.Name != hostname {
 		return
 	}
 
@@ -121,11 +125,11 @@ func (p *ProxySQL) podAdded(object interface{}) {
 	// other core pods.
 	var count int
 
-	cmd := fmt.Sprintf("SELECT count(*) FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP)
+	cmd := "SELECT count(*) FROM proxysql_servers WHERE hostname = ?"
 
-	err := p.conn.QueryRow(cmd).Scan(&count)
+	err := p.conn.QueryRow(cmd, pod.Status.PodIP).Scan(&count)
 	if err != nil {
-		slog.Error("Error in podAdded()", slog.Any("err", err))
+		slog.Error("Error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
 	}
 
 	if count > 0 {
@@ -148,7 +152,7 @@ func (p *ProxySQL) podAdded(object interface{}) {
 //	OLD POD NAME	OLD POD IP			OLD STATUS	NEW POD NAME		NEW POD IP			NEW STATUS
 //	proxysql-core-1						Pending 	proxysql-core-1 	192.168.194.102 	Running
 //	proxysql-core-1	192.168.194.102 	Running 	proxysql-core-1  						Failed
-func (p *ProxySQL) podUpdated(oldobject interface{}, newobject interface{}) {
+func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	// cast both objects into Pods, and if that fails leave the function
 	oldpod, ok := oldobject.(*v1.Pod)
 	if !ok {
@@ -204,9 +208,7 @@ func (p *ProxySQL) addPodToCluster(pod *v1.Pod) error {
 	for _, command := range commands {
 		_, err := p.conn.Exec(command)
 		if err != nil {
-			// FIXME: wrap error with extra info and return
-			slog.Error("Command failed", slog.String("command", command), slog.Any("error", err))
-			return err
+			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}
 	}
 
@@ -239,8 +241,7 @@ func (p *ProxySQL) removePodFromCluster(pod *v1.Pod) error {
 	for _, command := range commands {
 		_, err := p.conn.Exec(command)
 		if err != nil {
-			slog.Error("Command failed", slog.Any("command", command), slog.Any("error", err))
-			return err
+			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}
 	}
 

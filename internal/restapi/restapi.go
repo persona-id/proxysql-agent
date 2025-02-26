@@ -38,7 +38,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
-			fmt.Println("Error marshalling JSON:", err)
+			slog.Error("Error marshalling JSON", slog.Any("err", err))
 			return
 		}
 
@@ -209,6 +209,8 @@ func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	}
 }
 
+// safeToTerminate checks if it is safe to terminate the ProxySQL instance.
+// It returns true if there are no connected clients, otherwise it returns false.
 func safeToTerminate(psql *proxysql.ProxySQL) bool {
 	// check for connected clients, and when it hits 0 return true
 	clients, err := psql.ProbeClients()
@@ -221,7 +223,6 @@ func safeToTerminate(psql *proxysql.ProxySQL) bool {
 	}
 
 	// maybe we should also return true if a specified amount of time has passed, in order to not let one rogue transaction hold us up.
-
 	return clients == 0
 }
 
@@ -231,7 +232,7 @@ func killCSP() error {
 	// Make an HTTP request to localhost:9091/quitquitquit
 	resp, err := http.Get("http://localhost:9091/quitquitquit")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to make HTTP request to CSP: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -249,22 +250,31 @@ func killCSP() error {
 // It registers the necessary handlers for health checks and starts listening on the specified port.
 // The function panics if there is an error starting the server.
 func StartAPI(p *proxysql.ProxySQL) {
-	http.HandleFunc("/healthz/started", startupHandler(p))
-	http.HandleFunc("/healthz/ready", readinessHandler(p))
-	http.HandleFunc("/healthz/live", livenessHandler(p))
-
-	http.HandleFunc("/shutdown", preStopHandler(p))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz/started", startupHandler(p))
+	mux.HandleFunc("/healthz/ready", readinessHandler(p))
+	mux.HandleFunc("/healthz/live", livenessHandler(p))
+	mux.HandleFunc("/shutdown", preStopHandler(p))
 
 	// FIXME: make this configurable
 	port := ":8080"
+
+	// Create a server with reasonable timeouts
+	server := &http.Server{ //nolint:exhaustruct
+		Addr:              port,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	slog.Info("Starting HTTP server", slog.String("port", port))
 
 	// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
 	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
-	if err := http.ListenAndServe(port, nil); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		slog.Error("Error starting the HTTP server", slog.Any("err", err))
-
 		panic(err)
 	}
 }

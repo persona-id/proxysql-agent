@@ -26,8 +26,13 @@ test:
 	@mkdir -p coverage
 	@go test ./... --shuffle=on --coverprofile coverage/coverage.out
 
+# If the REMOTE_CONTAINERS environment variable is set to true (ie in devcontainers), just output the html file to disk
 coverage: test
-	@go tool cover -html=coverage/coverage.out
+	@if [ "$(REMOTE_CONTAINERS)" = "true" ]; then \
+		go tool cover -html=coverage/coverage.out -o=coverage/coverage.html; \
+	else \
+		go tool cover -html=coverage/coverage.out; \
+	fi
 
 run: build
 	@./$(TARGET)
