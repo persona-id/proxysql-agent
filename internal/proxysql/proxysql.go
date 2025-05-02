@@ -8,16 +8,16 @@ import (
 	"os"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
-	"k8s.io/client-go/kubernetes"
 
 	// Import the mysql driver functionality.
 	_ "github.com/go-sql-driver/mysql"
+	"k8s.io/client-go/kubernetes"
 )
 
 type ProxySQL struct {
+	clientset kubernetes.Interface
 	conn      *sql.DB
 	settings  *configuration.Config
-	clientset kubernetes.Interface
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -30,17 +30,17 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 
 	conn, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open MySQL connection: %w", err)
 	}
 
 	err = conn.Ping()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to ping ProxySQL: %w", err)
 	}
 
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
-	return &ProxySQL{conn, settings, nil}, nil
+	return &ProxySQL{nil, conn, settings}, nil
 }
 
 func (p *ProxySQL) Conn() *sql.DB {
@@ -48,7 +48,12 @@ func (p *ProxySQL) Conn() *sql.DB {
 }
 
 func (p *ProxySQL) Ping() error {
-	return p.conn.Ping()
+	err := p.conn.Ping()
+	if err != nil {
+		return fmt.Errorf("failed to ping ProxySQL: %w", err)
+	}
+
+	return nil
 }
 
 func (p *ProxySQL) GetBackends() (map[string]int, error) {
@@ -56,7 +61,7 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 
 	rows, err := p.conn.Query("SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query runtime_mysql_servers: %w", err)
 	}
 
 	defer rows.Close()
@@ -68,13 +73,13 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 
 		err := rows.Scan(&hostgroup, &hostname, &port)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		entries[hostname] = hostgroup
 
 		if rows.Err() != nil && errors.Is(err, sql.ErrNoRows) {
-			return nil, rows.Err()
+			return nil, fmt.Errorf("error iterating rows: %w", rows.Err())
 		}
 	}
 
@@ -84,35 +89,49 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 // k8s probes
 
 type ProbeResult struct {
-	Status   string `json:"status,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Clients  int    `json:"clients,omitempty"`
-	Draining bool   `json:"draining,omitempty"`
-	Probe    string `json:"probe,omitempty"`
-	Backends struct {
+	// Pointer types (8 bytes) first
+	Backends *struct {
 		Total  int `json:"total,omitempty"`
 		Online int `json:"online,omitempty"`
 	} `json:"backends,omitempty"`
+
+	// String types (16 bytes)
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
+	Probe   string `json:"probe,omitempty"`
+
+	// Integer types (8 bytes)
+	Clients int `json:"clients,omitempty"`
+
+	// Boolean types (1 byte)
+	Draining bool `json:"draining,omitempty"`
 }
 
 func (p *ProxySQL) RunProbes() (ProbeResult, error) {
 	total, online, err := p.probeBackends()
 	if err != nil {
-		return ProbeResult{}, err
+		return ProbeResult{}, fmt.Errorf("failed to probe backends: %w", err)
 	}
 
 	clients, err := p.ProbeClients()
 	if err != nil {
-		return ProbeResult{}, err
+		return ProbeResult{}, fmt.Errorf("failed to probe clients: %w", err)
 	}
 
 	results := ProbeResult{
 		Clients:  clients,
 		Draining: probeDraining(),
+		Probe:    "",
+		Status:   "",
+		Message:  "",
+		Backends: &struct {
+			Total  int `json:"total,omitempty"`
+			Online int `json:"online,omitempty"`
+		}{
+			Total:  total,
+			Online: online,
+		},
 	}
-
-	results.Backends.Total = total
-	results.Backends.Online = online
 
 	return processResults(results), nil
 }
@@ -137,22 +156,6 @@ func processResults(results ProbeResult) ProbeResult {
 	return results
 }
 
-func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
-	var total, online int
-
-	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
-	if err != nil {
-		return -1, -1, err
-	}
-
-	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
-	if err != nil {
-		return -1, -1, err
-	}
-
-	return online, total, nil
-}
-
 func (p *ProxySQL) ProbeClients() (int /* clients connected */, error) {
 	var online sql.NullInt32
 
@@ -163,7 +166,7 @@ func (p *ProxySQL) ProbeClients() (int /* clients connected */, error) {
 
 	err := p.conn.QueryRow(query).Scan(&online)
 	if err != nil {
-		return -1, err
+		return -1, fmt.Errorf("failed to query connection pool stats: %w", err)
 	}
 
 	if online.Valid {
@@ -189,4 +192,20 @@ func probeDraining() bool {
 	default:
 		return true
 	}
+}
+
+func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
+	var total, online int
+
+	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	if err != nil {
+		return -1, -1, fmt.Errorf("failed to query total backends: %w", err)
+	}
+
+	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	if err != nil {
+		return -1, -1, fmt.Errorf("failed to query online backends: %w", err)
+	}
+
+	return online, total, nil
 }

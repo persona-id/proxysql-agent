@@ -1,53 +1,153 @@
-# Visit https://golangci-lint.run/ for usage documentation
-# and information on other useful linters
-issues:
-  max-per-linter: 0
-  max-same-issues: 0
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
     - copyloopvar
+    - cyclop
+    - decorder
+    - depguard
+    - dogsled
     - dupl
     - dupword
     - durationcheck
+    - err113
     - errcheck
+    - errchkjson
     - errname
     - errorlint
+    - exhaustive
+    - exhaustruct
+    - exptostd
+    - fatcontext
+    - forbidigo
     - forcetypeassert
-    # - forbidigo
-    - decorder
-    - gocritic
-    - godot
-    - goconst
+    - funcorder
+    - funlen
+    - ginkgolinter
+    - gocheckcompilerdirectives
     - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
     # - godox
+    - goheader
+    - gomoddirectives
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - gosmopolitan
+    - govet
+    - grouper
+    - ineffassign
+    - makezero
+    - misspell
+    - musttag
+    - nilerr
+    - nilnil
+    - predeclared
+    - reassign
+    - revive
+    - sloglint
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+    - wrapcheck
+    - wsl
+
+  settings:
+    cyclop:
+      max-complexity: 20
+      package-average: 0
+    depguard:
+      rules:
+        main:
+          list-mode: strict
+          files:
+            - $all
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/go-sql-driver/mysql
+            - github.com/lmittmann/tint
+            - github.com/persona-id/proxysql-agent
+            - github.com/spf13/pflag
+            - github.com/spf13/viper
+            - github.com/yassinebenaid/godump
+            - k8s.io/api/core/v1
+            - k8s.io/apimachinery/pkg/apis/meta/v1
+            - k8s.io/apimachinery/pkg/labels
+            - k8s.io/apimachinery/pkg/util/runtime
+            - k8s.io/client-go/informers
+            - k8s.io/client-go/kubernetes
+            - k8s.io/client-go/rest
+            - k8s.io/client-go/tools/cache
+    errcheck:
+      check-blank: true
+    exhaustruct:
+      exclude:
+        - k8s\.io/api/core/v1.*
+        - k8s\.io/apimachinery/pkg/apis/meta/v1.*
+    funlen:
+      lines: -1
+      statements: 75
+    goconst:
+      min-occurrences: 5
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Exclude some linters from running on tests files.
+      - path: _test\.go
+        linters:
+          - cyclop
+          - errcheck
+          - dupl
+          - gosec
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 0
+  fix: true # automatically fix any issues that support it
+
+formatters:
+  enable:
     - gofmt
     - gofumpt
     - goimports
-    # - gomnd
-    - gosimple
-    - govet
-    - ineffassign
-    - makezero
-    - nilnil
-    - musttag
-    - misspell
-    - nilerr
-    - predeclared
-    - staticcheck
-    - reassign
-    - revive
-    - tenv
-    - unconvert
-    - unparam
-    - sloglint
-    - unused
-    # - testifylint
-    # - wrapcheck
-    - wsl
-    - whitespace
-
-linters-settings:
-  goconst:
-    min-occurrences: 5
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: "any"
+        - pattern: "a[b:len(a)]"
+          replacement: "a[b:]"
+    gofumpt:
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/persona-id/proxysql-agent
+  exclusions:
+    generated: lax

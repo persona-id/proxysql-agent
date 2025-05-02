@@ -8,6 +8,8 @@ import (
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 	"github.com/persona-id/proxysql-agent/internal/proxysql"
 	"github.com/persona-id/proxysql-agent/internal/restapi"
+
+	"github.com/lmittmann/tint"
 )
 
 var (
@@ -81,14 +83,20 @@ func setupLogger(settings *configuration.Config) {
 		level = slog.LevelInfo
 	}
 
-	opts := &slog.HandlerOptions{
-		AddSource: false,
-		Level:     level,
-	}
+	handler := tint.NewHandler(os.Stdout, &tint.Options{
+		AddSource:   false,
+		Level:       level,
+		TimeFormat:  time.RFC3339,
+		NoColor:     false,
+		ReplaceAttr: nil,
+	})
 
-	var handler slog.Handler = slog.NewTextHandler(os.Stdout, opts)
 	if settings.Log.Format == "JSON" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			AddSource:   false,
+			Level:       level,
+			ReplaceAttr: nil,
+		})
 	}
 
 	logger := slog.New(handler)
