@@ -6,7 +6,7 @@ toolchain go1.24.2
 
 require (
 	github.com/go-sql-driver/mysql v1.9.2
-	github.com/lmittmann/tint v1.0.7
+	github.com/lmittmann/tint v1.1.1
 	github.com/spf13/pflag v1.0.6
 	github.com/spf13/viper v1.20.1
 	github.com/yassinebenaid/godump v0.11.1
