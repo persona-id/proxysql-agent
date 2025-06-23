@@ -11,8 +11,8 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/yassinebenaid/godump v0.11.1
 	gopkg.in/DATA-DOG/go-sqlmock.v2 v2.0.0-20180914054222-c19298f520d0
-	k8s.io/api v0.33.0
-	k8s.io/apimachinery v0.33.0
+	k8s.io/api v0.33.2
+	k8s.io/apimachinery v0.33.2
 	k8s.io/client-go v0.33.0
 )
 
