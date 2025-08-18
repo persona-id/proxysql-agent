@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
@@ -51,15 +54,26 @@ func main() {
 		panic(err)
 	}
 
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		sig := <-sigChan
+		slog.Info("Received signal, initiating graceful shutdown", slog.String("signal", sig.String()))
+		cancel()
+	}()
+
 	// run the process in either core or satellite mode; each of these is a for {} loop,
 	// so it will block the process from exiting
 	switch settings.RunMode {
 	case "core":
 		go restapi.StartAPI(psql) // start the http api
-		psql.Core()
+		psql.Core(ctx)
 	case "satellite":
 		go restapi.StartAPI(psql) // start the http api
-		psql.Satellite()
+		psql.Satellite(ctx)
 	case "dump":
 		psql.DumpData()
 	default:

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/proxysql"
@@ -144,106 +142,12 @@ func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 
 func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		// FIXME: make these configurable
-		shutdownDelay := 120
-		hasCSP := false
-		drainFile := "/var/lib/proxysql/draining"
-
-		slog.Info("Pre-stop called, starting shutdown process", slog.Int("shutdownDelay", shutdownDelay))
-
-		_, err := os.Create(drainFile)
-		if err != nil {
-			slog.Error("Error creating drainFile", slog.String("path", drainFile), slog.Any("err", err))
-		}
-
-		// the settings in the proxysql variables are all in ms, so convert shutdownDelay over to MS
-		timeouts := shutdownDelay * int(time.Millisecond)
-
-		// disable new connections
-		commands := []string{
-			fmt.Sprintf("UPDATE global_variables SET variable_value = %d WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time')", timeouts),
-			"UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'",
-			"LOAD MYSQL VARIABLES TO RUNTIME",
-			"PROXYSQL PAUSE;",
-		}
-
-		for _, command := range commands {
-			_, err = psql.Conn().Exec(command)
-			if err != nil {
-				slog.Error("Command failed", slog.String("commands", command), slog.Any("error", err))
-			}
-		}
-
-		slog.Info("Pre-stop commands ran", slog.String("commands", strings.Join(commands, "; ")))
-
-		for {
-			if safeToTerminate(psql) {
-				slog.Info("No connected clients remaining, proceeding with shutdown")
-				break
-			}
-
-			time.Sleep(10 * time.Second)
-		}
-
-		// issue the PROXYSQL KILL command
-		_, err = psql.Conn().Exec("PROXYSQL KILL")
-		if err != nil {
-			slog.Error("KILL command failed", slog.String("commands", "PROXYSQL KILL"), slog.Any("error", err))
-		}
-
-		// kill cloud-sql-proxy (CSP) if it exists
-		if hasCSP {
-			err = killCSP()
-			if err != nil {
-				slog.Error("Failed to kill CSP", slog.Any("error", err))
-			}
-		}
-
-		time.Sleep(10 * time.Second)
-
 		// Return success response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
-		os.Exit(0)
+		psql.PreStopShutdown()
 	}
-}
-
-// safeToTerminate checks if it is safe to terminate the ProxySQL instance.
-// It returns true if there are no connected clients, otherwise it returns false.
-func safeToTerminate(psql *proxysql.ProxySQL) bool {
-	// check for connected clients, and when it hits 0 return true
-	clients, err := psql.ProbeClients()
-	if err != nil {
-		slog.Error("Error in probeClients()", slog.Any("err", err))
-	}
-
-	if clients > 0 {
-		slog.Info("Clients connected", slog.Int("clients", clients))
-	}
-
-	// maybe we should also return true if a specified amount of time has passed, in order to not let one rogue transaction hold us up.
-	return clients == 0
-}
-
-// Kill cloud-sql-proxy (CSP) if it is running; this should be optional and configurable,
-// or moved into a plugin down the road.
-func killCSP() error {
-	// Make an HTTP request to localhost:9091/quitquitquit
-	resp, err := http.Get("http://localhost:9091/quitquitquit")
-	if err != nil {
-		return fmt.Errorf("failed to make HTTP request to CSP: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check the response status
-	if resp.StatusCode == http.StatusOK {
-		slog.Info("Killed CSP")
-	} else {
-		slog.Warn("HTTP request to CSP failed", slog.String("status", resp.Status))
-	}
-
-	return nil
 }
 
 // StartAPI starts the HTTP server for the ProxySQL agent.

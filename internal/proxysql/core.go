@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -42,7 +43,7 @@ var ErrCacheTimeout = errors.New("timed out waiting for caches to sync")
 //   - When a satellite pod leaves the cluster, nothing needs to be done.
 //   - When a core pod leaves the cluster, the remaining core pods all delete that pod from the proxysql_servers
 //     table and run all of the LOAD X TO RUNTIME commands.
-func (p *ProxySQL) Core() {
+func (p *ProxySQL) Core(ctx context.Context) {
 	if p.clientset == nil {
 		config, err := rest.InClusterConfig()
 		if err != nil {
@@ -61,7 +62,30 @@ func (p *ProxySQL) Core() {
 
 	// stop signal for the informer
 	stopper := make(chan struct{})
-	defer close(stopper)
+
+	defer func() {
+		select {
+		case <-stopper:
+		default:
+			close(stopper)
+		}
+	}()
+
+	// Handle context cancellation
+	go func() {
+		select {
+		case <-ctx.Done():
+			slog.Info("Context cancelled, stopping core informer")
+			p.startDraining()
+			select {
+			case <-stopper:
+			default:
+				close(stopper)
+			}
+		case <-stopper:
+			return
+		}
+	}()
 
 	app := p.settings.Core.PodSelector.App
 	namespace := p.settings.Core.PodSelector.Namespace

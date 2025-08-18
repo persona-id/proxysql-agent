@@ -194,6 +194,17 @@ func probeDraining() bool {
 	}
 }
 
+// startDraining creates the drain file to signal that the pod is draining.
+func (p *ProxySQL) startDraining() {
+	drainFile := "/var/lib/proxysql/draining"
+	slog.Info("Creating drain file to signal draining state", slog.String("path", drainFile))
+
+	_, err := os.Create(drainFile)
+	if err != nil {
+		slog.Error("Error creating drainFile", slog.String("path", drainFile), slog.Any("err", err))
+	}
+}
+
 func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
 	var total, online int
 
