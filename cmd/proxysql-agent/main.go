@@ -69,10 +69,12 @@ func main() {
 	// so it will block the process from exiting
 	switch settings.RunMode {
 	case "core":
-		go restapi.StartAPI(psql) // start the http api
+		server := restapi.StartAPI(psql) // start the http api
+		psql.SetHTTPServer(server)
 		psql.Core(ctx)
 	case "satellite":
-		go restapi.StartAPI(psql) // start the http api
+		server := restapi.StartAPI(psql) // start the http api
+		psql.SetHTTPServer(server)
 		psql.Satellite(ctx)
 	case "dump":
 		psql.DumpData()
