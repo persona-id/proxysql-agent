@@ -1,7 +1,7 @@
 FROM debian:stable-slim 
 
-RUN addgroup agent \
-    && adduser -S agent -u 1000 -G agent
+RUN groupadd -r agent \
+    && useradd -r -u 1000 -g agent agent
 
 RUN apt-get update && apt-get install -y bash && apt-get clean && rm -rf /var/lib/apt/lists/*
 
