@@ -3,6 +3,7 @@ package proxysql
 import (
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
@@ -69,7 +70,15 @@ func TestPing(t *testing.T) {
 	}
 	defer db.Close()
 
-	proxy := &ProxySQL{nil, db, newTestConfig()}
+	proxy := &ProxySQL{
+		clientset:    nil,
+		conn:         db,
+		settings:     newTestConfig(),
+		shutdownOnce: sync.Once{},
+		shuttingDown: false,
+		shutdownMu:   sync.RWMutex{},
+		httpServer:   nil,
+	}
 
 	if err = proxy.Ping(); err != nil {
 		t.Errorf("Ping() returned an error: %v", err)
@@ -123,7 +132,15 @@ func TestGetBackends(t *testing.T) {
 			}
 			defer db.Close()
 
-			proxy := &ProxySQL{nil, db, newTestConfig()}
+			proxy := &ProxySQL{
+		clientset:    nil,
+		conn:         db,
+		settings:     newTestConfig(),
+		shutdownOnce: sync.Once{},
+		shuttingDown: false,
+		shutdownMu:   sync.RWMutex{},
+		httpServer:   nil,
+	}
 
 			tt.setupMock(mock)
 

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"sync"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 
@@ -15,9 +17,13 @@ import (
 )
 
 type ProxySQL struct {
-	clientset kubernetes.Interface
-	conn      *sql.DB
-	settings  *configuration.Config
+	clientset    kubernetes.Interface
+	conn         *sql.DB
+	settings     *configuration.Config
+	shutdownOnce sync.Once
+	shuttingDown bool
+	shutdownMu   sync.RWMutex
+	httpServer   *http.Server
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -40,7 +46,15 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
-	return &ProxySQL{nil, conn, settings}, nil
+	return &ProxySQL{
+		clientset:    nil,
+		conn:         conn,
+		settings:     settings,
+		shutdownOnce: sync.Once{},
+		shuttingDown: false,
+		shutdownMu:   sync.RWMutex{},
+		httpServer:   nil,
+	}, nil
 }
 
 func (p *ProxySQL) Conn() *sql.DB {
@@ -157,6 +171,11 @@ func processResults(results ProbeResult) ProbeResult {
 }
 
 func (p *ProxySQL) ProbeClients() (int /* clients connected */, error) {
+	// If connection is closed or we're shutting down, return 0 clients
+	if p.conn == nil || p.IsShuttingDown() {
+		return 0, nil
+	}
+
 	var online sql.NullInt32
 
 	// this one doesnt appear to do what we want
@@ -196,6 +215,10 @@ func probeDraining() bool {
 
 // startDraining creates the drain file to signal that the pod is draining.
 func (p *ProxySQL) startDraining() {
+	p.shutdownMu.Lock()
+	p.shuttingDown = true
+	p.shutdownMu.Unlock()
+	
 	drainFile := "/var/lib/proxysql/draining"
 	slog.Info("Creating drain file to signal draining state", slog.String("path", drainFile))
 
@@ -206,6 +229,11 @@ func (p *ProxySQL) startDraining() {
 }
 
 func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
+	// If connection is closed or we're shutting down, return default values
+	if p.conn == nil || p.IsShuttingDown() {
+		return 0, 0, nil
+	}
+
 	var total, online int
 
 	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
@@ -219,4 +247,16 @@ func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends on
 	}
 
 	return online, total, nil
+}
+
+// IsShuttingDown returns true if the ProxySQL instance is in shutdown process
+func (p *ProxySQL) IsShuttingDown() bool {
+	p.shutdownMu.RLock()
+	defer p.shutdownMu.RUnlock()
+	return p.shuttingDown
+}
+
+// SetHTTPServer sets the HTTP server reference for graceful shutdown
+func (p *ProxySQL) SetHTTPServer(server *http.Server) {
+	p.httpServer = server
 }
