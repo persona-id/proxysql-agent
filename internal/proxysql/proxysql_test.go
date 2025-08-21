@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync"
@@ -64,6 +65,8 @@ func newTestConfig() *configuration.Config {
 }
 
 func TestPing(t *testing.T) {
+	t.Parallel()
+
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
@@ -80,7 +83,8 @@ func TestPing(t *testing.T) {
 		httpServer:   nil,
 	}
 
-	if err = proxy.Ping(); err != nil {
+	err = proxy.Ping(context.Background())
+	if err != nil {
 		t.Errorf("Ping() returned an error: %v", err)
 	}
 
@@ -88,12 +92,15 @@ func TestPing(t *testing.T) {
 		t.Error("Conn should not be nil")
 	}
 
-	if err = mock.ExpectationsWereMet(); err != nil {
+	err = mock.ExpectationsWereMet()
+	if err != nil {
 		t.Errorf("SQL expectations were not met: %v", err)
 	}
 }
 
 func TestGetBackends(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		setupMock      func(mock sqlmock.Sqlmock)
@@ -126,6 +133,8 @@ func TestGetBackends(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			db, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatalf("Error creating mock database: %v", err)
@@ -144,13 +153,15 @@ func TestGetBackends(t *testing.T) {
 
 			tt.setupMock(mock)
 
-			entries, err := proxy.GetBackends()
+			entries, err := proxy.GetBackends(context.Background())
 
 			switch {
 			case tt.expectedErr == nil && err != nil:
 				t.Errorf("GetBackends() returned unexpected error: %v", err)
+
 			case tt.expectedErr != nil && err == nil:
 				t.Errorf("GetBackends() expected error: %v, got nil", tt.expectedErr)
+
 			case tt.expectedErr != nil && err != nil:
 				if !errors.Is(err, tt.expectedErr) {
 					t.Errorf("GetBackends() expected error to wrap: %v, got: %v", tt.expectedErr, err)
@@ -161,7 +172,8 @@ func TestGetBackends(t *testing.T) {
 				t.Errorf("GetBackends() expected result: %v, got: %v", tt.expectedResult, entries)
 			}
 
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("SQL expectations were not met: %v", err)
 			}
 		})

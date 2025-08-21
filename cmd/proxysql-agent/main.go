@@ -16,10 +16,12 @@ import (
 )
 
 var (
+	// FIXME(kuzmik): use buildinfo package instead
+	//
 	// Version will be the version tag if the binary is built with "go install url/tool@version".
 	// See https://goreleaser.com/cookbooks/using-main.version/
 	// Current git tag.
-	version = "unknown" //nolint:gochecknoglobals
+	version = "unknown"
 	// Current git commit sha.
 	commit = "unknown" //nolint:gochecknoglobals
 	// Built at date.
@@ -35,7 +37,11 @@ func main() {
 
 	setupLogger(settings)
 
-	slog.Info("build info", slog.Any("version", version), slog.Any("committed", date), slog.Any("revision", commit))
+	slog.Info("build info",
+		slog.String("version", version),
+		slog.String("committed", date),
+		slog.String("revision", commit),
+	)
 
 	// if defined, pause before booting; this allows the proxysql containers to fully come up before the agent tries
 	// connecting; sometimes the proxysql container can take a few seconds to fully start. This is mainly only
@@ -65,6 +71,13 @@ func main() {
 		cancel()
 	}()
 
+	// TODO(kuzmik): add SIGUSR1 and SIGUSR2 to the signal handler.
+	//   - SIGUSR1: dump `select * from proxysql_servers` etc to STDOUT.
+	// 	   - Basically show me the info i nomrally have to exect into a pod and select via the proxysql admin cli
+	//   -SIGUSR2: unsure as yet, maybe reload configs or trigger a resync.
+
+	// TODO(kuzmik): convert these to sync.Go() (new in go1.25)
+
 	// run the process in either core or satellite mode; each of these is a for {} loop,
 	// so it will block the process from exiting
 	switch settings.RunMode {
@@ -72,12 +85,15 @@ func main() {
 		server := restapi.StartAPI(psql) // start the http api
 		psql.SetHTTPServer(server)
 		psql.Core(ctx)
+
 	case "satellite":
 		server := restapi.StartAPI(psql) // start the http api
 		psql.SetHTTPServer(server)
 		psql.Satellite(ctx)
+
 	case "dump":
-		psql.DumpData()
+		psql.DumpData(ctx)
+
 	default:
 		slog.Info("No run mode specified, exiting")
 	}

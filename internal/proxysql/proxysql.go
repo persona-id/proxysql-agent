@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -39,7 +40,7 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		return nil, fmt.Errorf("failed to open MySQL connection: %w", err)
 	}
 
-	err = conn.Ping()
+	err = conn.PingContext(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to ping ProxySQL: %w", err)
 	}
@@ -61,8 +62,8 @@ func (p *ProxySQL) Conn() *sql.DB {
 	return p.conn
 }
 
-func (p *ProxySQL) Ping() error {
-	err := p.conn.Ping()
+func (p *ProxySQL) Ping(ctx context.Context) error {
+	err := p.conn.PingContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to ping ProxySQL: %w", err)
 	}
@@ -70,10 +71,10 @@ func (p *ProxySQL) Ping() error {
 	return nil
 }
 
-func (p *ProxySQL) GetBackends() (map[string]int, error) {
+func (p *ProxySQL) GetBackends(ctx context.Context) (map[string]int, error) {
 	entries := make(map[string]int)
 
-	rows, err := p.conn.Query("SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id")
+	rows, err := p.conn.QueryContext(ctx, "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query runtime_mysql_servers: %w", err)
 	}
@@ -92,7 +93,7 @@ func (p *ProxySQL) GetBackends() (map[string]int, error) {
 
 		entries[hostname] = hostgroup
 
-		if rows.Err() != nil && errors.Is(err, sql.ErrNoRows) {
+		if rows.Err() != nil && errors.Is(rows.Err(), sql.ErrNoRows) {
 			return nil, fmt.Errorf("error iterating rows: %w", rows.Err())
 		}
 	}
@@ -121,13 +122,13 @@ type ProbeResult struct {
 	Draining bool `json:"draining,omitempty"`
 }
 
-func (p *ProxySQL) RunProbes() (ProbeResult, error) {
-	total, online, err := p.probeBackends()
+func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
+	total, online, err := p.probeBackends(ctx)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("failed to probe backends: %w", err)
 	}
 
-	clients, err := p.ProbeClients()
+	clients, err := p.ProbeClients(ctx)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("failed to probe clients: %w", err)
 	}
@@ -170,7 +171,7 @@ func processResults(results ProbeResult) ProbeResult {
 	return results
 }
 
-func (p *ProxySQL) ProbeClients() (int /* clients connected */, error) {
+func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected */, error) {
 	// If connection is closed or we're shutting down, return 0 clients
 	if p.conn == nil || p.IsShuttingDown() {
 		return 0, nil
@@ -183,7 +184,7 @@ func (p *ProxySQL) ProbeClients() (int /* clients connected */, error) {
 
 	query := "select sum(ConnUsed) from stats_mysql_connection_pool"
 
-	err := p.conn.QueryRow(query).Scan(&online)
+	err := p.conn.QueryRowContext(ctx, query).Scan(&online)
 	if err != nil {
 		return -1, fmt.Errorf("failed to query connection pool stats: %w", err)
 	}
@@ -241,7 +242,7 @@ func (p *ProxySQL) startDraining() {
 	}
 }
 
-func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends online */, error) {
+func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */, int /* backends online */, error) {
 	// If connection is closed or we're shutting down, return default values
 	if p.conn == nil || p.IsShuttingDown() {
 		return 0, 0, nil
@@ -249,12 +250,12 @@ func (p *ProxySQL) probeBackends() (int /* backends total */, int /* backends on
 
 	var total, online int
 
-	err := p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
 	if err != nil {
 		return -1, -1, fmt.Errorf("failed to query total backends: %w", err)
 	}
 
-	err = p.conn.QueryRow("SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
 	if err != nil {
 		return -1, -1, fmt.Errorf("failed to query online backends: %w", err)
 	}

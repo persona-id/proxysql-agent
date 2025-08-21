@@ -2,7 +2,9 @@ package proxysql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -33,7 +35,7 @@ func (p *ProxySQL) Satellite(ctx context.Context) {
 
 			return
 		case <-ticker.C:
-			err := p.SatelliteResync()
+			err := p.SatelliteResync(ctx)
 			if err != nil {
 				slog.Error("Error running resync", slog.Any("error", err))
 			}
@@ -41,7 +43,7 @@ func (p *ProxySQL) Satellite(ctx context.Context) {
 	}
 }
 
-func (p *ProxySQL) GetMissingCorePods() (int, error) {
+func (p *ProxySQL) GetMissingCorePods(ctx context.Context) (int, error) {
 	count := -1
 
 	query := `SELECT COUNT(hostname)
@@ -49,7 +51,7 @@ func (p *ProxySQL) GetMissingCorePods() (int, error) {
 			WHERE last_check_ms > 30000
 			AND hostname != 'proxysql-core'
 			AND Uptime_s > 0`
-	row := p.conn.QueryRow(query)
+	row := p.conn.QueryRowContext(ctx, query)
 
 	err := row.Scan(&count)
 	if err != nil {
@@ -66,7 +68,7 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) {
 	// Step 1: Pause ProxySQL to stop accepting new database connections
 	// (HTTP server continues serving shutdown responses)
 	if p.conn != nil {
-		_, err := p.conn.Exec("PROXYSQL PAUSE;")
+		_, err := p.conn.ExecContext(ctx, "PROXYSQL PAUSE;")
 		if err != nil {
 			slog.Error("Failed to pause ProxySQL", slog.Any("error", err))
 		} else {
@@ -78,17 +80,18 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) {
 	}
 
 	// Step 2: Wait for existing connections to drain (reasonable fixed time)
-	drainTime := 30 * time.Second
+	drainTime := 30 * time.Second //nolint:mnd
 	slog.Info("Waiting for connections to drain", slog.Duration("waitTime", drainTime))
 	time.Sleep(drainTime)
 
 	// Step 3: Stop HTTP server after connections have drained
 	if p.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second) //nolint:mnd
 
 		slog.Info("Shutting down HTTP server")
 
-		if err := p.httpServer.Shutdown(shutdownCtx); err != nil {
+		err := p.httpServer.Shutdown(shutdownCtx)
+		if err != nil {
 			slog.Error("Error shutting down HTTP server", slog.Any("err", err))
 		}
 
@@ -107,8 +110,8 @@ func (p *ProxySQL) PreStopShutdown(ctx context.Context) {
 	})
 }
 
-func (p *ProxySQL) SatelliteResync() error {
-	missing, err := p.GetMissingCorePods()
+func (p *ProxySQL) SatelliteResync(ctx context.Context) error {
+	missing, err := p.GetMissingCorePods(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,7 +126,7 @@ func (p *ProxySQL) SatelliteResync() error {
 		}
 
 		for _, command := range commands {
-			_, err := p.conn.Exec(command)
+			_, err := p.conn.ExecContext(ctx, command)
 			if err != nil {
 				return fmt.Errorf("failed to execute command '%s': %w", command, err)
 			}
@@ -139,7 +142,7 @@ func (p *ProxySQL) SatelliteResync() error {
 //  3. stats_mysql_query_rules
 //
 // FIXME: all these functions dump to /tmp/XXXX/Y.csv; we want the directory to be configurable at least.
-func (p *ProxySQL) DumpData() {
+func (p *ProxySQL) DumpData(ctx context.Context) {
 	tmpdir, fileErr := os.MkdirTemp("/tmp", "")
 	if fileErr != nil {
 		slog.Error("Error in DumpData()", slog.Any("error", fileErr))
@@ -147,7 +150,7 @@ func (p *ProxySQL) DumpData() {
 		return
 	}
 
-	digestsFile, err := p.DumpQueryDigests(tmpdir)
+	digestsFile, err := p.DumpQueryDigests(ctx, tmpdir)
 	if err != nil {
 		slog.Error("Error in DumpQueryDigests()", slog.Any("error", err))
 
@@ -158,10 +161,10 @@ func (p *ProxySQL) DumpData() {
 }
 
 // ProxySQL docs: https://proxysql.com/documentation/stats-statistics/#stats_mysql_query_digest
-func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
+func (p *ProxySQL) DumpQueryDigests(ctx context.Context, tmpdir string) (string, error) {
 	var rowCount int
 
-	err := p.conn.QueryRow("SELECT COUNT(*) FROM stats_mysql_query_digest").Scan(&rowCount)
+	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM stats_mysql_query_digest").Scan(&rowCount)
 	if err != nil {
 		return "", fmt.Errorf("failed to get query digest count: %w", err)
 	}
@@ -212,12 +215,13 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 		"sum_rows_sent",
 	}
 
-	if writeErr := writer.Write(header); writeErr != nil {
+	writeErr := writer.Write(header)
+	if writeErr != nil {
 		return "", fmt.Errorf("failed to write header to digest file: %w", writeErr)
 	}
 
-	rows, queryErr := p.conn.Query("SELECT * FROM stats_mysql_query_digest")
-	if queryErr != nil {
+	rows, queryErr := p.conn.QueryContext(ctx, "SELECT * FROM stats_mysql_query_digest")
+	if queryErr != nil && !errors.Is(rows.Err(), sql.ErrNoRows) {
 		return "", fmt.Errorf("failed to query digest data: %w", queryErr)
 	}
 
@@ -255,7 +259,8 @@ func (p *ProxySQL) DumpQueryDigests(tmpdir string) (string, error) {
 		}
 
 		// Write the values to the CSV file
-		if err := writer.Write(values); err != nil {
+		err = writer.Write(values)
+		if err != nil {
 			return "", fmt.Errorf("failed to write digest values: %w", err)
 		}
 	}

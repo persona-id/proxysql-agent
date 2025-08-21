@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Stage 1
-FROM golang:1.21.4-alpine AS builder
+FROM golang:1.25.0-alpine AS builder
 
 ARG BUILD_SHA
 ARG BUILD_TIME
@@ -18,12 +18,10 @@ RUN go mod download
 
 COPY . .
 
-RUN apk add --no-cache git=2.40.1-r0
-
 RUN CGO_ENABLED="0" go build -ldflags "-s -w" -o proxysql-agent cmd/proxysql-agent/main.go
 
 # Stage 2
-FROM alpine:3.18.4 as runner
+FROM alpine:3.18.4 AS runner
 
 RUN addgroup agent \
     && adduser -S agent -u 1000 -G agent

@@ -1,14 +1,16 @@
 {
   "name": "proxysql-agent",
-  "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+  // FIXME: There is no 1.25-bookworm image yet, so we are using the go image (which is based on Debian) until the new one is available,
+  // so nothing will really work in the containers until the image is updated.
+  "image": "mcr.microsoft.com/devcontainers/go",
   "features": {},
-  // "workspaceFolder": "/workspace",
+  "workspaceFolder": "/workspace",
   // Install extra packages we might need that do not have a feature.
   "postCreateCommand": "bash -i .devcontainer/bin/install-dependencies",
   // Environment variables to set in the container
   "remoteEnv": {
     // add the bin directory to the path so we can use the db script more easily.
-    // "PATH": "/workspace/.devcontainer/bin:${containerEnv:PATH}"
+    "PATH": "/workspace/.devcontainer/bin:${containerEnv:PATH}"
   },
   "customizations": {
     "vscode": {

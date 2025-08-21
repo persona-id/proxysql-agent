@@ -19,7 +19,7 @@ import (
 // If the probes pass, it returns a 200 OK status code.
 // The livenessHandler also logs the status check result for debugging purposes.
 func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		// During shutdown, avoid running probes that might fail
@@ -45,7 +45,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 			return
 		}
 
-		results, err := psql.RunProbes()
+		results, err := psql.RunProbes(r.Context())
 		if err != nil {
 			slog.Error("Error in probes()", slog.Any("err", err))
 
@@ -62,6 +62,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshalling JSON", slog.Any("err", err))
+
 			return
 		}
 
@@ -101,7 +102,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // that even if a backend is offline, connections to proxysql are accepted; in other words, unless proxysql is paused
 // connections to the serving port with the right creds will succeed.
 func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		// During shutdown, mark as not ready
@@ -127,7 +128,7 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 			return
 		}
 
-		results, err := psql.RunProbes()
+		results, err := psql.RunProbes(r.Context())
 		if err != nil {
 			slog.Error("Error in probes()", slog.Any("err", err))
 
@@ -144,6 +145,7 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshaling json", slog.Any("err", err))
+
 			return
 		}
 
@@ -167,11 +169,10 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // is up and listening. This also has the _intended_ side effect of ensuring that
 // the mysql connection to the admin port is open.
 func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		err := psql.Ping()
-
+		err := psql.Ping(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 
@@ -215,10 +216,10 @@ func StartAPI(p *proxysql.ProxySQL) *http.Server {
 	server := &http.Server{ //nolint:exhaustruct
 		Addr:              port,
 		Handler:           mux,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second, //nolint:mnd
+		WriteTimeout:      10 * time.Second, //nolint:mnd
+		IdleTimeout:       30 * time.Second, //nolint:mnd
+		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
 	}
 
 	slog.Info("Starting HTTP server", slog.String("port", port))
@@ -226,7 +227,8 @@ func StartAPI(p *proxysql.ProxySQL) *http.Server {
 	go func() {
 		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
 		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Error starting the HTTP server", slog.Any("err", err))
 			panic(err)
 		}
@@ -237,12 +239,13 @@ func StartAPI(p *proxysql.ProxySQL) *http.Server {
 
 // ShutdownServer gracefully shuts down the HTTP server.
 func ShutdownServer(server *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) //nolint:mnd
 	defer cancel()
 
 	slog.Info("Shutting down HTTP server")
 
-	if err := server.Shutdown(ctx); err != nil {
+	err := server.Shutdown(ctx)
+	if err != nil {
 		slog.Error("Error shutting down HTTP server", slog.Any("err", err))
 	}
 }

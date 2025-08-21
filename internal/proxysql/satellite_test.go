@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"context"
 	"errors"
 	"regexp"
 	"sync"
@@ -10,6 +11,8 @@ import (
 )
 
 func TestGetMissingCorePods(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		expectedCount int
@@ -38,6 +41,8 @@ func TestGetMissingCorePods(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			db, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatalf("Error creating mock database: %v", err)
@@ -58,7 +63,7 @@ func TestGetMissingCorePods(t *testing.T) {
 			tt.setupMock(mock)
 
 			// Call the function being tested
-			count, err := proxy.GetMissingCorePods()
+			count, err := proxy.GetMissingCorePods(context.Background())
 
 			// Check error
 			switch {
@@ -79,7 +84,8 @@ func TestGetMissingCorePods(t *testing.T) {
 			}
 
 			// Verify all expectations were met
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("SQL expectations were not met: %v", err)
 			}
 		})
@@ -87,6 +93,8 @@ func TestGetMissingCorePods(t *testing.T) {
 }
 
 func TestSatelliteResync(t *testing.T) {
+	t.Parallel()
+
 	// Mock database connection
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -118,12 +126,13 @@ func TestSatelliteResync(t *testing.T) {
 		mock.ExpectExec(command).WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 
-	err = p.SatelliteResync()
+	err = p.SatelliteResync(context.Background())
 	if err != nil {
 		t.Errorf("Expected no error, but got %s", err)
 	}
 
-	if err := mock.ExpectationsWereMet(); err != nil {
+	err = mock.ExpectationsWereMet()
+	if err != nil {
 		t.Errorf("There were unfulfilled expectations: %s", err)
 	}
 }
