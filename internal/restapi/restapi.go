@@ -1,7 +1,9 @@
 package restapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +21,29 @@ import (
 func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		// During shutdown, avoid running probes that might fail
+		if psql.IsShuttingDown() {
+			result := map[string]any{
+				"status":   "draining",
+				"message":  "shutting down",
+				"probe":    "liveness",
+				"draining": true,
+			}
+
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				slog.Error("Error marshalling JSON", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusOK) // Keep liveness OK during draining
+			fmt.Fprint(w, string(resultJSON))
+
+			return
+		}
 
 		results, err := psql.RunProbes()
 		if err != nil {
@@ -78,6 +103,29 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		// During shutdown, mark as not ready
+		if psql.IsShuttingDown() {
+			result := map[string]any{
+				"status":   "draining",
+				"message":  "shutting down",
+				"probe":    "readiness",
+				"draining": true,
+			}
+
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				slog.Error("Error marshalling JSON", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusServiceUnavailable) // Not ready during shutdown
+			fmt.Fprint(w, string(resultJSON))
+
+			return
+		}
 
 		results, err := psql.RunProbes()
 		if err != nil {
@@ -141,19 +189,19 @@ func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 }
 
 func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		// Return success response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
-		psql.PreStopShutdown()
+		psql.PreStopShutdown(r.Context())
 	}
 }
 
 // StartAPI starts the HTTP server for the ProxySQL agent.
 // It registers the necessary handlers for health checks and starts listening on the specified port.
-// The function panics if there is an error starting the server.
-func StartAPI(p *proxysql.ProxySQL) {
+// Returns the server instance for graceful shutdown.
+func StartAPI(p *proxysql.ProxySQL) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz/started", startupHandler(p))
 	mux.HandleFunc("/healthz/ready", readinessHandler(p))
@@ -175,10 +223,26 @@ func StartAPI(p *proxysql.ProxySQL) {
 
 	slog.Info("Starting HTTP server", slog.String("port", port))
 
-	// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
-	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
-	if err := server.ListenAndServe(); err != nil {
-		slog.Error("Error starting the HTTP server", slog.Any("err", err))
-		panic(err)
+	go func() {
+		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
+		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Error starting the HTTP server", slog.Any("err", err))
+			panic(err)
+		}
+	}()
+
+	return server
+}
+
+// ShutdownServer gracefully shuts down the HTTP server.
+func ShutdownServer(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	slog.Info("Shutting down HTTP server")
+
+	if err := server.Shutdown(ctx); err != nil {
+		slog.Error("Error shutting down HTTP server", slog.Any("err", err))
 	}
 }

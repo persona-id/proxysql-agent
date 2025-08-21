@@ -3,6 +3,7 @@ package proxysql
 import (
 	"errors"
 	"regexp"
+	"sync"
 	"testing"
 
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
@@ -43,7 +44,15 @@ func TestGetMissingCorePods(t *testing.T) {
 			}
 			defer db.Close()
 
-			proxy := &ProxySQL{nil, db, newTestConfig()}
+			proxy := &ProxySQL{
+				clientset:    nil,
+				conn:         db,
+				settings:     newTestConfig(),
+				shutdownOnce: sync.Once{},
+				shuttingDown: false,
+				shutdownMu:   sync.RWMutex{},
+				httpServer:   nil,
+			}
 
 			// Setup the mock
 			tt.setupMock(mock)
@@ -88,9 +97,13 @@ func TestSatelliteResync(t *testing.T) {
 	mock.MatchExpectationsInOrder(true)
 
 	p := &ProxySQL{
-		clientset: nil,
-		conn:      db,
-		settings:  newTestConfig(),
+		clientset:    nil,
+		conn:         db,
+		settings:     newTestConfig(),
+		shutdownOnce: sync.Once{},
+		shuttingDown: false,
+		shutdownMu:   sync.RWMutex{},
+		httpServer:   nil,
 	}
 
 	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")

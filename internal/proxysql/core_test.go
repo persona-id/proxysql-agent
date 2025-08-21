@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -74,7 +75,15 @@ func TestPodUpdated(t *testing.T) {
 
 			mock.MatchExpectationsInOrder(true)
 
-			p := &ProxySQL{nil, db, newTestConfig()}
+			p := &ProxySQL{
+				clientset:    nil,
+				conn:         db,
+				settings:     newTestConfig(),
+				shutdownOnce: sync.Once{},
+				shuttingDown: false,
+				shutdownMu:   sync.RWMutex{},
+				httpServer:   nil,
+			}
 
 			oldpod := &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -171,7 +180,15 @@ func TestPodAdded(t *testing.T) {
 
 			mock.MatchExpectationsInOrder(true)
 
-			p := &ProxySQL{nil, db, newTestConfig()}
+			p := &ProxySQL{
+				clientset:    nil,
+				conn:         db,
+				settings:     newTestConfig(),
+				shutdownOnce: sync.Once{},
+				shuttingDown: false,
+				shutdownMu:   sync.RWMutex{},
+				httpServer:   nil,
+			}
 
 			pod := &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -275,7 +292,15 @@ func TestAddPodToCluster(t *testing.T) {
 
 			mock.MatchExpectationsInOrder(true)
 
-			p := &ProxySQL{nil, db, newTestConfig()}
+			p := &ProxySQL{
+				clientset:    nil,
+				conn:         db,
+				settings:     newTestConfig(),
+				shutdownOnce: sync.Once{},
+				shuttingDown: false,
+				shutdownMu:   sync.RWMutex{},
+				httpServer:   nil,
+			}
 
 			pod := &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -377,7 +402,15 @@ func TestRemovePodFromCluster(t *testing.T) {
 
 			mock.MatchExpectationsInOrder(true)
 
-			p := &ProxySQL{nil, db, newTestConfig()}
+			p := &ProxySQL{
+				clientset:    nil,
+				conn:         db,
+				settings:     newTestConfig(),
+				shutdownOnce: sync.Once{},
+				shuttingDown: false,
+				shutdownMu:   sync.RWMutex{},
+				httpServer:   nil,
+			}
 
 			pod := &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{

@@ -5,10 +5,8 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -28,8 +26,10 @@ func (p *ProxySQL) Satellite(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			slog.Info("Context cancelled, stopping satellite")
-			p.startDraining()
-			p.gracefulShutdown()
+			p.shutdownOnce.Do(func() {
+				p.startDraining()
+				p.gracefulShutdown(ctx)
+			})
 
 			return
 		case <-ticker.C:
@@ -60,102 +60,51 @@ func (p *ProxySQL) GetMissingCorePods() (int, error) {
 }
 
 // gracefulShutdown performs the graceful shutdown logic for satellite mode.
-func (p *ProxySQL) gracefulShutdown() {
-	// FIXME: make these configurable
-	shutdownDelay := 120
-	hasCSP := false
+func (p *ProxySQL) gracefulShutdown(ctx context.Context) {
+	slog.Info("Starting graceful shutdown process")
 
-	slog.Info("Starting graceful shutdown process", slog.Int("shutdownDelay", shutdownDelay))
-
-	// the settings in the proxysql variables are all in ms, so convert shutdownDelay over to MS
-	timeouts := shutdownDelay * int(time.Millisecond)
-
-	// disable new connections
-	commands := []string{
-		fmt.Sprintf("UPDATE global_variables SET variable_value = %d WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time')", timeouts),
-		"UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"PROXYSQL PAUSE;",
-	}
-
-	for _, command := range commands {
-		_, err := p.conn.Exec(command)
+	// Step 1: Pause ProxySQL to stop accepting new database connections
+	// (HTTP server continues serving shutdown responses)
+	if p.conn != nil {
+		_, err := p.conn.Exec("PROXYSQL PAUSE;")
 		if err != nil {
-			slog.Error("Command failed", slog.String("commands", command), slog.Any("error", err))
-		}
-	}
-
-	slog.Info("Pre-stop commands ran", slog.String("commands", strings.Join(commands, "; ")))
-
-	for {
-		if p.safeToTerminate() {
-			slog.Info("No connected clients remaining, proceeding with shutdown")
-			break
+			slog.Error("Failed to pause ProxySQL", slog.Any("error", err))
+		} else {
+			slog.Info("ProxySQL paused successfully")
 		}
 
-		time.Sleep(10 * time.Second)
+		p.conn.Close()
+		p.conn = nil
 	}
 
-	// issue the PROXYSQL KILL command
-	_, err := p.conn.Exec("PROXYSQL KILL")
-	if err != nil {
-		slog.Error("KILL command failed", slog.String("commands", "PROXYSQL KILL"), slog.Any("error", err))
-	}
+	// Step 2: Wait for existing connections to drain (reasonable fixed time)
+	drainTime := 30 * time.Second
+	slog.Info("Waiting for connections to drain", slog.Duration("waitTime", drainTime))
+	time.Sleep(drainTime)
 
-	// kill cloud-sql-proxy (CSP) if it exists
-	if hasCSP {
-		err = p.killCSP()
-		if err != nil {
-			slog.Error("Failed to kill CSP", slog.Any("error", err))
+	// Step 3: Stop HTTP server after connections have drained
+	if p.httpServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
+		slog.Info("Shutting down HTTP server")
+
+		if err := p.httpServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Error shutting down HTTP server", slog.Any("err", err))
 		}
+
+		cancel()
 	}
 
-	time.Sleep(10 * time.Second)
-
+	slog.Info("Graceful shutdown completed")
 	os.Exit(0)
 }
 
 // PreStopShutdown performs the complete graceful shutdown logic for HTTP handler.
-func (p *ProxySQL) PreStopShutdown() {
-	p.startDraining()
-	p.gracefulShutdown()
-}
-
-// safeToTerminate checks if it is safe to terminate the ProxySQL instance.
-// It returns true if there are no connected clients, otherwise it returns false.
-func (p *ProxySQL) safeToTerminate() bool {
-	// check for connected clients, and when it hits 0 return true
-	clients, err := p.ProbeClients()
-	if err != nil {
-		slog.Error("Error in probeClients()", slog.Any("err", err))
-	}
-
-	if clients > 0 {
-		slog.Info("Clients connected", slog.Int("clients", clients))
-	}
-
-	// maybe we should also return true if a specified amount of time has passed, in order to not let one rogue transaction hold us up.
-	return clients == 0
-}
-
-// killCSP kills cloud-sql-proxy (CSP) if it is running; this should be optional and configurable,
-// or moved into a plugin down the road.
-func (p *ProxySQL) killCSP() error {
-	// Make an HTTP request to localhost:9091/quitquitquit
-	resp, err := http.Get("http://localhost:9091/quitquitquit")
-	if err != nil {
-		return fmt.Errorf("failed to make HTTP request to CSP: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check the response status
-	if resp.StatusCode == http.StatusOK {
-		slog.Info("Killed CSP")
-	} else {
-		slog.Warn("HTTP request to CSP failed", slog.String("status", resp.Status))
-	}
-
-	return nil
+func (p *ProxySQL) PreStopShutdown(ctx context.Context) {
+	p.shutdownOnce.Do(func() {
+		p.startDraining()
+		p.gracefulShutdown(ctx)
+	})
 }
 
 func (p *ProxySQL) SatelliteResync() error {
