@@ -1,6 +1,7 @@
 package proxysql
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -19,13 +20,19 @@ import (
 var errSQLTest = errors.New("SQL error")
 
 func TestCore(t *testing.T) {
+	t.Parallel()
+
 	t.Run("TODO", func(t *testing.T) {
+		t.Parallel()
+
 		t.Log("TODO test")
 		t.Skip("TODO test")
 	})
 }
 
 func TestPodUpdated(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name        string
 		setupMock   func(mock sqlmock.Sqlmock)
@@ -67,6 +74,8 @@ func TestPodUpdated(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			db, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatalf("Failed to create mock database connection: %v", err)
@@ -117,7 +126,8 @@ func TestPodUpdated(t *testing.T) {
 
 			p.podUpdated(oldpod, newpod)
 
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})
@@ -125,6 +135,8 @@ func TestPodUpdated(t *testing.T) {
 }
 
 func TestPodAdded(t *testing.T) {
+	t.Parallel()
+
 	hostname, err := os.Hostname()
 	if err != nil {
 		t.Fatalf("Failed to get hostname: %v", err)
@@ -172,6 +184,8 @@ func TestPodAdded(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			db, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatalf("Failed to create mock database connection: %v", err)
@@ -207,7 +221,8 @@ func TestPodAdded(t *testing.T) {
 
 			p.podAdded(pod)
 
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})
@@ -215,6 +230,8 @@ func TestPodAdded(t *testing.T) {
 }
 
 func TestAddPodToCluster(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name       string
 		expectFunc func(t *testing.T, err error)
@@ -239,6 +256,8 @@ func TestAddPodToCluster(t *testing.T) {
 				expectRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
@@ -255,6 +274,8 @@ func TestAddPodToCluster(t *testing.T) {
 				expectRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
@@ -269,8 +290,11 @@ func TestAddPodToCluster(t *testing.T) {
 					WillReturnError(errSQLTest)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err == nil {
 					t.Errorf("expected error, got nil")
+
 					return
 				}
 
@@ -284,43 +308,17 @@ func TestAddPodToCluster(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatalf("Failed to create mock database connection: %v", err)
-			}
-			defer db.Close()
+			t.Parallel()
 
-			mock.MatchExpectationsInOrder(true)
-
-			p := &ProxySQL{
-				clientset:    nil,
-				conn:         db,
-				settings:     newTestConfig(),
-				shutdownOnce: sync.Once{},
-				shuttingDown: false,
-				shutdownMu:   sync.RWMutex{},
-				httpServer:   nil,
-			}
-
-			pod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: tc.namespace,
-					Labels: map[string]string{
-						"component": tc.component,
-					},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-				},
-			}
+			p, mock, pod := setupPodTest(t, tc.namespace, tc.component)
 
 			tc.setupMock(mock)
 
-			err = p.addPodToCluster(pod)
+			err := p.addPodToCluster(context.Background(), pod)
 			tc.expectFunc(t, err)
 
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})
@@ -328,6 +326,8 @@ func TestAddPodToCluster(t *testing.T) {
 }
 
 func TestRemovePodFromCluster(t *testing.T) {
+	t.Parallel()
+
 	testCases := []struct {
 		name       string
 		expectFunc func(t *testing.T, err error)
@@ -349,6 +349,8 @@ func TestRemovePodFromCluster(t *testing.T) {
 				expectRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
@@ -362,6 +364,8 @@ func TestRemovePodFromCluster(t *testing.T) {
 				expectRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
@@ -379,8 +383,11 @@ func TestRemovePodFromCluster(t *testing.T) {
 				)
 			},
 			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
 				if err == nil {
 					t.Errorf("expected error, got nil")
+
 					return
 				}
 
@@ -394,43 +401,17 @@ func TestRemovePodFromCluster(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatalf("Failed to create mock database connection: %v", err)
-			}
-			defer db.Close()
+			t.Parallel()
 
-			mock.MatchExpectationsInOrder(true)
-
-			p := &ProxySQL{
-				clientset:    nil,
-				conn:         db,
-				settings:     newTestConfig(),
-				shutdownOnce: sync.Once{},
-				shuttingDown: false,
-				shutdownMu:   sync.RWMutex{},
-				httpServer:   nil,
-			}
-
-			pod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: tc.namespace,
-					Labels: map[string]string{
-						"component": tc.component,
-					},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-				},
-			}
+			p, mock, pod := setupPodTest(t, tc.namespace, tc.component)
 
 			tc.setupMock(mock)
 
-			err = p.removePodFromCluster(pod)
+			err := p.removePodFromCluster(context.Background(), pod)
 			tc.expectFunc(t, err)
 
-			if err := mock.ExpectationsWereMet(); err != nil {
+			err = mock.ExpectationsWereMet()
+			if err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})
@@ -449,4 +430,44 @@ func expectRuntimeLoads(mock sqlmock.Sqlmock) {
 	} {
 		mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+}
+
+// Helper function to set up common test infrastructure for pod operations.
+// It's fine to return an interface here, that's what we want to do.
+func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock.Sqlmock, *v1.Pod) { //nolint:ireturn
+	t.Helper()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database connection: %v", err)
+	}
+
+	t.Cleanup(func() { db.Close() })
+
+	mock.MatchExpectationsInOrder(true)
+
+	p := &ProxySQL{
+		clientset:    nil,
+		conn:         db,
+		settings:     newTestConfig(),
+		shutdownOnce: sync.Once{},
+		shuttingDown: false,
+		shutdownMu:   sync.RWMutex{},
+		httpServer:   nil,
+	}
+
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"component": component,
+			},
+		},
+		Status: v1.PodStatus{
+			PodIP: "pod-ip",
+		},
+	}
+
+	return p, mock, pod
 }

@@ -1,47 +1,45 @@
-SHELL := /bin/bash
+BINARY := proxysql-agent
 
-# The name of the executable
-TARGET := 'proxysql-agent'
+.PHONY: help bench build check clean coverage coverage-html fmt lint run test
 
-# Use linker flags to provide version/build settings to the target.
-LDFLAGS=-ldflags "-s -w"
+default: help
 
-all: clean lint build
+bench: ## Run benchmarks
+	@go test --race --shuffle=on --bench=. --benchmem ./...
 
-$(TARGET):
-	@go build $(LDFLAGS) -o $(TARGET) cmd/proxysql-agent/main.go
+build: ## Build the application
+	@go build -o $(BINARY) cmd/proxysql-agent/main.go
 
-build: clean $(TARGET)
-	@true
+check: fmt lint test ## Run formatting (via golangci-lint), vetting (also via golangci-lint), linting, tests, benchmarks, and race detection
 
-clean:
-	@rm -rf $(TARGET) *.test *.out tmp/* coverage dist
+clean: ## Clean build artifacts and coverage files
+	@go clean
+	@rm -f coverage.out coverage.html $(BINARY)
 
-lint:
-	@gofmt -s -l -w .
-	@go vet ./...
-	@golangci-lint run --config=.golangci.yml --allow-parallel-runners
-
-test:
+coverage: ## Generate test coverage report
 	@mkdir -p coverage
-	@go test ./... --shuffle=on --coverprofile coverage/coverage.out
+	@go test --race --shuffle=on --coverprofile=coverage/coverage.out ./...
+	@go tool cover --func=coverage/coverage.out
 
-# If the REMOTE_CONTAINERS environment variable is set to true (ie in devcontainers), just output the html file to disk
-coverage: test
-	@if [ "$(REMOTE_CONTAINERS)" = "true" ]; then \
-		go tool cover -html=coverage/coverage.out -o=coverage/coverage.html; \
-	else \
-		go tool cover -html=coverage/coverage.out; \
-	fi
-
-run: build
-	@./$(TARGET)
+coverage-html: coverage ## Generate HTML coverage report and open in browser
+	@go tool cover --html=coverage/coverage.out -o coverage/coverage.html
+	@open coverage/coverage.html
 
 docker: clean lint
 	@docker build -f build/dev.Dockerfile -t persona-id/proxysql-agent:latest .
 
-snapshot: clean lint
-	@goreleaser --snapshot --clean
+fmt: ## Format code
+	@golangci-lint-v2 fmt ./...
 
-release: clean lint
-	@goreleaser --clean
+help: ## Show this help message
+	@echo "Available targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+lint: ## Run golangci-lint
+	@golangci-lint-v2 run
+
+run: clean build ## Run the application. not really useful outside of a k8s cluster.
+	@./$(BINARY)
+
+test: ## Run tests
+	@go test --race --shuffle=on ./...

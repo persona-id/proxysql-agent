@@ -1,4 +1,4 @@
-FROM debian:stable-slim 
+FROM debian:stable-slim
 
 RUN groupadd -r agent \
     && useradd -r -u 1000 -g agent agent

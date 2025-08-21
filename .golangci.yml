@@ -1,76 +1,25 @@
 version: "2"
 linters:
-  default: none
-  enable:
-    - asasalint
-    - asciicheck
-    - bidichk
-    - bodyclose
-    - canonicalheader
-    - containedctx
-    - contextcheck
-    - copyloopvar
-    - cyclop
-    - decorder
-    - depguard
-    - dogsled
-    - dupl
-    - dupword
-    - durationcheck
-    - err113
-    - errcheck
-    - errchkjson
-    - errname
-    - errorlint
+  default: all
+  disable:
     - exhaustive
     - exhaustruct
-    - exptostd
-    - fatcontext
-    - forbidigo
-    - forcetypeassert
-    - funcorder
-    - funlen
-    - ginkgolinter
-    - gocheckcompilerdirectives
-    - gochecknoglobals
-    - gochecknoinits
-    - gochecksumtype
-    - gocognit
-    - goconst
-    - gocritic
-    - gocyclo
-    - godot
-    # - godox
-    - goheader
-    - gomoddirectives
-    - gomodguard
-    - goprintffuncname
-    - gosec
-    - gosmopolitan
-    - govet
-    - grouper
-    - ineffassign
-    - makezero
-    - misspell
-    - musttag
-    - nilerr
-    - nilnil
-    - predeclared
-    - reassign
-    - revive
-    - sloglint
-    - staticcheck
-    - unconvert
-    - unparam
-    - unused
-    - whitespace
-    - wrapcheck
+    - lll
+    - testpackage
+    - varnamelen
     - wsl
+    - godox # FIXME
 
   settings:
     cyclop:
-      max-complexity: 20
+      max-complexity: 30
       package-average: 0
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
     depguard:
       rules:
         main:
@@ -82,55 +31,59 @@ linters:
             - $gostd
             - github.com/go-sql-driver/mysql
             - github.com/lmittmann/tint
-            - github.com/persona-id/proxysql-agent
+            - github.com/persona-id/proxysql-agent/
             - github.com/spf13/pflag
             - github.com/spf13/viper
             - github.com/yassinebenaid/godump
             - k8s.io/api/core/v1
             - k8s.io/apimachinery/pkg/apis/meta/v1
             - k8s.io/apimachinery/pkg/labels
+            - k8s.io/apimachinery/pkg/types
             - k8s.io/apimachinery/pkg/util/runtime
+            - k8s.io/apimachinery/pkg/util/wait
             - k8s.io/client-go/informers
             - k8s.io/client-go/kubernetes
             - k8s.io/client-go/rest
             - k8s.io/client-go/tools/cache
-    errcheck:
-      check-blank: true
-    exhaustruct:
-      exclude:
-        - k8s\.io/api/core/v1.*
-        - k8s\.io/apimachinery/pkg/apis/meta/v1.*
+            - k8s.io/client-go/tools/record
+            - k8s.io/client-go/tools/record/test
     funlen:
       lines: -1
-      statements: 75
+      statements: 65
+    gocognit:
+      min-complexity: 40
     goconst:
       min-occurrences: 5
     govet:
       enable-all: true
       disable:
         - fieldalignment
+    tagliatelle:
+      case:
+        rules:
+          json: snake
 
   exclusions:
     generated: lax
-    warn-unused: true
     presets:
       - comments
       - common-false-positives
       - legacy
       - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
     rules:
-      # Exclude some linters from running on tests files.
-      - path: _test\.go
+      # We can't parallelize these tests because they share the same configuration map when the test runs
+      # and maps are not thread-safe.
+      - path: internal/configuration/configuration_test\.go
         linters:
-          - cyclop
-          - errcheck
-          - dupl
-          - gosec
+          - paralleltest
 
 issues:
-  max-issues-per-linter: 50
+  max-issues-per-linter: 0
   max-same-issues: 0
-  fix: true # automatically fix any issues that support it
 
 formatters:
   enable:
@@ -148,6 +101,9 @@ formatters:
       extra-rules: true
     goimports:
       local-prefixes:
-        - github.com/persona-id/proxysql-agent
+        - github.com/persona-id/proxysql-agent/
   exclusions:
     generated: lax
+
+run:
+  tests: true

@@ -77,6 +77,7 @@ func (p *ProxySQL) Core(ctx context.Context) {
 		case <-ctx.Done():
 			slog.Info("Context cancelled, stopping core informer")
 			p.startDraining()
+
 			select {
 			case <-stopper:
 			default:
@@ -111,6 +112,7 @@ func (p *ProxySQL) Core(ctx context.Context) {
 
 	if !cache.WaitForCacheSync(stopper, podInformer.HasSynced) {
 		runtime.HandleError(ErrCacheTimeout)
+
 		return
 	}
 
@@ -134,6 +136,8 @@ func (p *ProxySQL) Core(ctx context.Context) {
 //
 // This feels a bit clumsy.
 func (p *ProxySQL) podAdded(object any) {
+	ctx := context.Background() // Use background context for event handlers
+
 	pod, ok := object.(*v1.Pod)
 	if !ok {
 		return
@@ -141,7 +145,8 @@ func (p *ProxySQL) podAdded(object any) {
 
 	// if the new pod is not THIS pod, bail out of this function. the rest of this function should only apply
 	// to the first core pod to come up in the cluster.
-	if hostname, osErr := os.Hostname(); osErr != nil || pod.Name != hostname {
+	hostname, osErr := os.Hostname()
+	if osErr != nil || pod.Name != hostname {
 		return
 	}
 
@@ -151,7 +156,7 @@ func (p *ProxySQL) podAdded(object any) {
 
 	cmd := "SELECT count(*) FROM proxysql_servers WHERE hostname = ?"
 
-	err := p.conn.QueryRow(cmd, pod.Status.PodIP).Scan(&count)
+	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
 	if err != nil {
 		slog.Error("Error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
 	}
@@ -160,7 +165,7 @@ func (p *ProxySQL) podAdded(object any) {
 		return
 	}
 
-	err = p.addPodToCluster(pod)
+	err = p.addPodToCluster(ctx, pod)
 	if err != nil {
 		slog.Error("Error in podAdded()", slog.Any("err", err))
 	}
@@ -177,6 +182,7 @@ func (p *ProxySQL) podAdded(object any) {
 //	proxysql-core-1						Pending 	proxysql-core-1 	192.168.194.102 	Running
 //	proxysql-core-1	192.168.194.102 	Running 	proxysql-core-1  						Failed
 func (p *ProxySQL) podUpdated(oldobject, newobject any) {
+	ctx := context.Background() // Use background context for event handlers
 	// cast both objects into Pods, and if that fails leave the function
 	oldpod, ok := oldobject.(*v1.Pod)
 	if !ok {
@@ -190,7 +196,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 
 	// Pod is new and transitioned to running, so we add that to the proxysql_servers table.
 	if oldpod.Status.Phase == "Pending" && newpod.Status.Phase == "Running" {
-		err := p.addPodToCluster(newpod)
+		err := p.addPodToCluster(ctx, newpod)
 		if err != nil {
 			slog.Error("Error in addPod()", slog.Any("err", err))
 		}
@@ -199,7 +205,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	// Pod is shutting down. Only run this for core pods, as satellites don't need special considerations when
 	// they leave the cluster.
 	if oldpod.Status.Phase == "Running" && newpod.Status.Phase == "Failed" {
-		err := p.removePodFromCluster(oldpod)
+		err := p.removePodFromCluster(ctx, oldpod)
 		if err != nil {
 			slog.Error("Error in removePod()", slog.Any("err", err))
 		}
@@ -209,7 +215,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 // Add the new pod to the cluster.
 //   - If it's a core pod, add it to the proxysql_servers table
 //   - if it's a satellite pod, run the commands to accept it to the cluster
-func (p *ProxySQL) addPodToCluster(pod *v1.Pod) error {
+func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 	slog.Info("Pod joined the cluster", slog.String("name", pod.Name), slog.String("ip", pod.Status.PodIP))
 
 	commands := []string{"DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'"}
@@ -230,7 +236,7 @@ func (p *ProxySQL) addPodToCluster(pod *v1.Pod) error {
 	)
 
 	for _, command := range commands {
-		_, err := p.conn.Exec(command)
+		_, err := p.conn.ExecContext(ctx, command)
 		if err != nil {
 			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}
@@ -244,7 +250,7 @@ func (p *ProxySQL) addPodToCluster(pod *v1.Pod) error {
 // Remove a core pod from the cluster when it leaves. This function just deletes the pod from
 // proxysql_servers based on the hostname (PodIP here, technically). The function then runs all the
 // LOAD TO RUNTIME commands required to sync state to the rest of the cluster.
-func (p *ProxySQL) removePodFromCluster(pod *v1.Pod) error {
+func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error {
 	slog.Info("Pod left the cluster", slog.String("name", pod.Name), slog.String("ip", pod.Status.PodIP))
 
 	commands := []string{}
@@ -263,7 +269,7 @@ func (p *ProxySQL) removePodFromCluster(pod *v1.Pod) error {
 	)
 
 	for _, command := range commands {
-		_, err := p.conn.Exec(command)
+		_, err := p.conn.ExecContext(ctx, command)
 		if err != nil {
 			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}

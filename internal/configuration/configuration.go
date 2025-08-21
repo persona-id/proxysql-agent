@@ -73,7 +73,8 @@ func Configure() (*Config, error) {
 	}
 
 	// read the config file, if it exists. if not, keep on truckin'
-	if err := viper.ReadInConfig(); err != nil {
+	err := viper.ReadInConfig()
+	if err != nil {
 		errVal := viper.ConfigFileNotFoundError{}
 		if ok := errors.As(err, &errVal); !ok {
 			return nil, fmt.Errorf("error reading config file: %w", err)
@@ -81,7 +82,8 @@ func Configure() (*Config, error) {
 	}
 
 	// Setup command line flags
-	if err := setupFlags(); err != nil {
+	err = setupFlags()
+	if err != nil {
 		return nil, fmt.Errorf("error setting up flags: %w", err)
 	}
 
@@ -98,13 +100,14 @@ func Configure() (*Config, error) {
 	}
 
 	// Validate configuration
-	if err := validateConfig(); err != nil {
+	err = validateConfig()
+	if err != nil {
 		return nil, err
 	}
 
 	settings := &Config{} //nolint:exhaustruct
 
-	err := viper.Unmarshal(settings)
+	err = viper.Unmarshal(settings)
 	if err != nil {
 		return nil, fmt.Errorf("error unmarshaling configuration: %w", err)
 	}
@@ -125,12 +128,12 @@ func setDefaults() {
 	viper.GetViper().SetDefault("proxysql.username", "radmin")
 	viper.GetViper().SetDefault("proxysql.password", "")
 
-	viper.GetViper().SetDefault("core.interval", 10)
+	viper.GetViper().SetDefault("core.interval", 10) //nolint:mnd
 	viper.GetViper().SetDefault("core.podselector.namespace", "proxysql")
 	viper.GetViper().SetDefault("core.podselector.app", "proxysql")
 	viper.GetViper().SetDefault("core.podselector.component", "core")
 
-	viper.GetViper().SetDefault("satellite.interval", 10)
+	viper.GetViper().SetDefault("satellite.interval", 10) //nolint:mnd
 }
 
 // setupFlags sets up command line flags.
@@ -144,13 +147,13 @@ func setupFlags() error {
 	pflag.String("proxysql.username", "radmin", "user for the proxysql admin interface")
 	pflag.String("proxysql.password", "radmin", "password for the proxysql admin interface; this is not recommended for use in production")
 
-	pflag.Int("core.interval", 10, "seconds to sleep in the core clustering loop")
+	pflag.Int("core.interval", 10, "seconds to sleep in the core clustering loop") //nolint:mnd
 	pflag.String("core.checksum_file", "/tmp/pods-cs.txt", "path to the pods checksum file")
 	pflag.String("core.podselector.namespace", "proxysql", "namespace to use in the k8s pod selector label")
 	pflag.String("core.podselector.app", "proxysql", "app to use in the k8s pod selector label")
 	pflag.String("core.podselector.component", "core", "component to use in the k8s pod selector label")
 
-	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop")
+	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop") //nolint:mnd
 
 	pflag.Bool("show-config", false, "Dump the configuration for debugging")
 
@@ -161,7 +164,8 @@ func setupFlags() error {
 
 	pflag.Parse()
 
-	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
+	err = viper.BindPFlags(pflag.CommandLine)
+	if err != nil {
 		return fmt.Errorf("failed to bind flags: %w", err)
 	}
 

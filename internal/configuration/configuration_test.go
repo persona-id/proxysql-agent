@@ -131,19 +131,21 @@ func TestDefaults(t *testing.T) {
 
 func TestConfigFile(t *testing.T) {
 	// Create a temporary config file
-	tmpfile, err := os.CreateTemp("", "config_test_*.yaml")
+	tmpfile, err := os.CreateTemp(t.TempDir(), "config_test_*.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer os.Remove(tmpfile.Name())
 
 	// Write the test config to the file
-	if _, fileErr := tmpfile.Write(testConfigFile); fileErr != nil {
+	_, fileErr := tmpfile.Write(testConfigFile)
+	if fileErr != nil {
 		t.Fatalf("Failed to write to temp file: %v", fileErr)
 	}
 
-	if closeErr := tmpfile.Close(); closeErr != nil {
-		t.Fatalf("Failed to close temp file: %v", closeErr)
+	err = tmpfile.Close()
+	if err != nil {
+		t.Fatalf("Failed to close temp file: %v", err)
 	}
 
 	// Set up test
@@ -310,18 +312,20 @@ func TestFlags(t *testing.T) {
 
 func TestPrecedence(t *testing.T) {
 	// Create a temporary config file
-	tmpfile, err := os.CreateTemp("", "config_test_*.yaml")
+	tmpfile, err := os.CreateTemp(t.TempDir(), "config_test_*.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer os.Remove(tmpfile.Name())
 
 	// Write test config to the file
-	if _, err := tmpfile.Write(testConfigFile); err != nil {
+	_, err = tmpfile.Write(testConfigFile)
+	if err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
 
-	if err := tmpfile.Close(); err != nil {
+	err = tmpfile.Close()
+	if err != nil {
 		t.Fatalf("Failed to close temp file: %v", err)
 	}
 
