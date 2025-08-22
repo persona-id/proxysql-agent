@@ -85,13 +85,13 @@ func TestPodUpdated(t *testing.T) {
 			mock.MatchExpectationsInOrder(true)
 
 			p := &ProxySQL{
-				clientset:    nil,
-				conn:         db,
-				settings:     newTestConfig(),
-				shutdownOnce: sync.Once{},
-				shuttingDown: false,
-				shutdownMu:   sync.RWMutex{},
-				httpServer:   nil,
+				clientset:     nil,
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownOnce:  sync.Once{},
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+				httpServer:    nil,
 			}
 
 			oldpod := &v1.Pod{
@@ -195,13 +195,13 @@ func TestPodAdded(t *testing.T) {
 			mock.MatchExpectationsInOrder(true)
 
 			p := &ProxySQL{
-				clientset:    nil,
-				conn:         db,
-				settings:     newTestConfig(),
-				shutdownOnce: sync.Once{},
-				shuttingDown: false,
-				shutdownMu:   sync.RWMutex{},
-				httpServer:   nil,
+				clientset:     nil,
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownOnce:  sync.Once{},
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+				httpServer:    nil,
 			}
 
 			pod := &v1.Pod{
@@ -434,7 +434,9 @@ func expectRuntimeLoads(mock sqlmock.Sqlmock) {
 
 // Helper function to set up common test infrastructure for pod operations.
 // It's fine to return an interface here, that's what we want to do.
-func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock.Sqlmock, *v1.Pod) { //nolint:ireturn
+//
+//nolint:ireturn
+func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock.Sqlmock, *v1.Pod) {
 	t.Helper()
 
 	db, mock, err := sqlmock.New()
@@ -447,13 +449,13 @@ func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock
 	mock.MatchExpectationsInOrder(true)
 
 	p := &ProxySQL{
-		clientset:    nil,
-		conn:         db,
-		settings:     newTestConfig(),
-		shutdownOnce: sync.Once{},
-		shuttingDown: false,
-		shutdownMu:   sync.RWMutex{},
-		httpServer:   nil,
+		clientset:     nil,
+		conn:          db,
+		settings:      newTestConfig(),
+		shutdownOnce:  sync.Once{},
+		shutdownPhase: PhaseRunning,
+		shutdownMu:    sync.RWMutex{},
+		httpServer:    nil,
 	}
 
 	pod := &v1.Pod{

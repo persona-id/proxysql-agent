@@ -2,7 +2,6 @@ version: "2"
 linters:
   default: all
   disable:
-    - exhaustive
     - exhaustruct
     - lll
     - testpackage
