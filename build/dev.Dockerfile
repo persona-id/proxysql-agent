@@ -32,7 +32,7 @@ RUN apk add --no-cache bash=5.2.15-r5
 WORKDIR /app
 
 COPY --chown=agent:agent --from=builder --chmod=700 /build/proxysql-agent /app/
-COPY --chown=agent:agent --from=builder --chmod=600 /build/configs/config.yaml /app/config.yaml
+COPY --chown=agent:agent --from=builder --chmod=600 /build/configs/example_config.yaml /app/config.yaml
 
 USER agent
 

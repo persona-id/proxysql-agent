@@ -14,7 +14,7 @@ check: fmt lint test ## Run formatting (via golangci-lint), vetting (also via go
 
 clean: ## Clean build artifacts and coverage files
 	@go clean
-	@rm -f coverage.out coverage.html $(BINARY)
+	@rm -rf coverage $(BINARY)
 
 coverage: ## Generate test coverage report
 	@mkdir -p coverage
@@ -39,7 +39,7 @@ lint: ## Run golangci-lint
 	@golangci-lint-v2 run
 
 run: clean build ## Run the application. not really useful outside of a k8s cluster.
-	@./$(BINARY)
+	@./$(BINARY) --log.level=DEBUG --proxysql.password=radmin --run_mode=satellite --shutdown.draining_file=/tmp/proxysql-draining
 
 test: ## Run tests
 	@go test --race --shuffle=on ./...

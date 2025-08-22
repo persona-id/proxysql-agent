@@ -1,5 +1,8 @@
 # Random directories we don't need in the iamge
+/.claude
+/.devcontainer
 /.github
+/.vscode
 /build
 /tmp
 

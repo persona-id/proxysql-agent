@@ -17,14 +17,39 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// ShutdownPhase represents the current shutdown state.
+type ShutdownPhase int
+
+const (
+	PhaseRunning ShutdownPhase = iota
+	PhaseDraining
+	PhaseStopping
+	PhaseStopped
+)
+
+func (p ShutdownPhase) String() string {
+	switch p {
+	case PhaseRunning:
+		return "running"
+	case PhaseDraining:
+		return "draining"
+	case PhaseStopping:
+		return "stopping"
+	case PhaseStopped:
+		return "stopped"
+	default:
+		return "unknown"
+	}
+}
+
 type ProxySQL struct {
-	clientset    kubernetes.Interface
-	conn         *sql.DB
-	settings     *configuration.Config
-	shutdownOnce sync.Once
-	shuttingDown bool
-	shutdownMu   sync.RWMutex
-	httpServer   *http.Server
+	clientset     kubernetes.Interface
+	conn          *sql.DB
+	settings      *configuration.Config
+	shutdownOnce  sync.Once
+	shutdownPhase ShutdownPhase
+	shutdownMu    sync.RWMutex
+	httpServer    *http.Server
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -48,18 +73,14 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
 
 	return &ProxySQL{
-		clientset:    nil,
-		conn:         conn,
-		settings:     settings,
-		shutdownOnce: sync.Once{},
-		shuttingDown: false,
-		shutdownMu:   sync.RWMutex{},
-		httpServer:   nil,
+		clientset:     nil,
+		conn:          conn,
+		settings:      settings,
+		shutdownOnce:  sync.Once{},
+		shutdownPhase: PhaseRunning,
+		shutdownMu:    sync.RWMutex{},
+		httpServer:    nil,
 	}, nil
-}
-
-func (p *ProxySQL) Conn() *sql.DB {
-	return p.conn
 }
 
 func (p *ProxySQL) Ping(ctx context.Context) error {
@@ -71,59 +92,23 @@ func (p *ProxySQL) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (p *ProxySQL) GetBackends(ctx context.Context) (map[string]int, error) {
-	entries := make(map[string]int)
-
-	rows, err := p.conn.QueryContext(ctx, "SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id")
-	if err != nil {
-		return nil, fmt.Errorf("failed to query runtime_mysql_servers: %w", err)
-	}
-
-	defer rows.Close()
-
-	for rows.Next() {
-		var hostgroup, port int
-
-		var hostname string
-
-		err := rows.Scan(&hostgroup, &hostname, &port)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		entries[hostname] = hostgroup
-
-		if rows.Err() != nil && errors.Is(rows.Err(), sql.ErrNoRows) {
-			return nil, fmt.Errorf("error iterating rows: %w", rows.Err())
-		}
-	}
-
-	return entries, nil
-}
-
 // k8s probes
 
 type ProbeResult struct {
-	// Pointer types (8 bytes) first
 	Backends *struct {
-		Total  int `json:"total,omitempty"`
-		Online int `json:"online,omitempty"`
+		Total   int `json:"total,omitempty"`
+		Online  int `json:"online,omitempty"`
+		Shunned int `json:"shunned,omitempty"`
 	} `json:"backends,omitempty"`
-
-	// String types (16 bytes)
-	Status  string `json:"status,omitempty"`
-	Message string `json:"message,omitempty"`
-	Probe   string `json:"probe,omitempty"`
-
-	// Integer types (8 bytes)
-	Clients int `json:"clients,omitempty"`
-
-	// Boolean types (1 byte)
-	Draining bool `json:"draining,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Probe    string `json:"probe,omitempty"`
+	Clients  int    `json:"clients,omitempty"`
+	Draining bool   `json:"draining,omitempty"`
 }
 
 func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
-	total, online, err := p.probeBackends(ctx)
+	total, online, shunned, err := p.probeBackends(ctx)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("failed to probe backends: %w", err)
 	}
@@ -135,16 +120,18 @@ func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
 
 	results := ProbeResult{
 		Clients:  clients,
-		Draining: probeDraining(),
+		Draining: p.probeDraining(),
 		Probe:    "",
 		Status:   "",
 		Message:  "",
 		Backends: &struct {
-			Total  int `json:"total,omitempty"`
-			Online int `json:"online,omitempty"`
+			Total   int `json:"total,omitempty"`
+			Online  int `json:"online,omitempty"`
+			Shunned int `json:"shunned,omitempty"`
 		}{
-			Total:  total,
-			Online: online,
+			Total:   total,
+			Online:  online,
+			Shunned: shunned,
 		},
 	}
 
@@ -157,12 +144,15 @@ func processResults(results ProbeResult) ProbeResult {
 	case results.Backends.Online > results.Backends.Total:
 		results.Status = "ok"
 		results.Message = "some backends offline"
+
 	case results.Backends.Online == 0:
 		results.Status = "unhealthy"
 		results.Message = "all backends offline"
+
 	case results.Draining:
 		results.Status = "draining"
 		results.Message = "draining traffic"
+
 	default:
 		results.Status = "ok"
 		results.Message = "all backends online"
@@ -179,10 +169,7 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 
 	var online sql.NullInt32
 
-	// this one doesnt appear to do what we want
-	// query := "SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1"
-
-	query := "select sum(ConnUsed) from stats_mysql_connection_pool"
+	query := "SELECT Client_Connections_connected FROM mysql_connections ORDER BY timestamp DESC LIMIT 1"
 
 	err := p.conn.QueryRowContext(ctx, query).Scan(&online)
 	if err != nil {
@@ -196,30 +183,12 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 	return -1, nil
 }
 
-// if the file /var/lib/proxysql/draining exists, we're in maint mode or draining traffic
-// for a shutdown, and should return unhealthy.
-func probeDraining() bool {
-	// FIXME: make this configurable?
-	filename := "/var/lib/proxysql/draining"
-
-	_, err := os.Stat(filename)
-
-	switch {
-	case os.IsNotExist(err):
-		return false
-	case err != nil:
-		return false
-	default:
-		return true
-	}
-}
-
 // IsShuttingDown returns true if the ProxySQL instance is in shutdown process.
 func (p *ProxySQL) IsShuttingDown() bool {
 	p.shutdownMu.RLock()
 	defer p.shutdownMu.RUnlock()
 
-	return p.shuttingDown
+	return p.shutdownPhase != PhaseRunning
 }
 
 // SetHTTPServer sets the HTTP server reference for graceful shutdown.
@@ -227,38 +196,89 @@ func (p *ProxySQL) SetHTTPServer(server *http.Server) {
 	p.httpServer = server
 }
 
-// startDraining creates the drain file to signal that the pod is draining.
-func (p *ProxySQL) startDraining() {
+// setShutdownPhase updates the shutdown phase with logging.
+func (p *ProxySQL) setShutdownPhase(phase ShutdownPhase) {
 	p.shutdownMu.Lock()
-	p.shuttingDown = true
-	p.shutdownMu.Unlock()
+	defer p.shutdownMu.Unlock()
 
-	drainFile := "/var/lib/proxysql/draining"
-	slog.Info("Creating drain file to signal draining state", slog.String("path", drainFile))
+	oldPhase := p.shutdownPhase
+	p.shutdownPhase = phase
 
-	_, err := os.Create(drainFile)
-	if err != nil {
-		slog.Error("Error creating drainFile", slog.String("path", drainFile), slog.Any("err", err))
+	if oldPhase != phase {
+		slog.Info("shutdown phase changed",
+			slog.String("from", oldPhase.String()),
+			slog.String("to", phase.String()),
+		)
 	}
 }
 
-func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */, int /* backends online */, error) {
-	// If connection is closed or we're shutting down, return default values
-	if p.conn == nil || p.IsShuttingDown() {
-		return 0, 0, nil
+// probeDraining checks if the draining file exists, indicating that the pod is in maintenance mode
+// or draining traffic for a shutdown, and should return unhealthy.
+func (p *ProxySQL) probeDraining() bool {
+	filename := p.settings.Shutdown.DrainingFile
+
+	_, err := os.Stat(filename)
+
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return false
+
+	case err != nil:
+		return false
+
+	default:
+		return true
+	}
+}
+
+// startDraining creates the drain file to signal that the pod is draining.
+func (p *ProxySQL) startDraining() error {
+	p.setShutdownPhase(PhaseDraining)
+
+	drainFile := p.settings.Shutdown.DrainingFile
+
+	_, err := os.Create(drainFile)
+	if err != nil {
+		return fmt.Errorf("failed to create drain file %s: %w", drainFile, err)
 	}
 
-	var total, online int
+	slog.Info("created drain file", slog.String("path", drainFile))
+
+	shutdownCtx := context.Background()
+
+	_, execErr := p.conn.ExecContext(shutdownCtx, "PROXYSQL PAUSE")
+	if execErr != nil {
+		// Continue with shutdown even if pause fails
+		slog.Error("failed to pause ProxySQL", slog.Any("error", execErr))
+	} else {
+		slog.Info("ProxySQL paused")
+	}
+
+	return nil
+}
+
+func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */, int /* backends online */, int /* backends shunned */, error) {
+	// If connection is closed or we're shutting down, return default values
+	if p.conn == nil || p.IsShuttingDown() {
+		return 0, 0, 0, nil
+	}
+
+	var total, online, shunned int
 
 	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
 	if err != nil {
-		return -1, -1, fmt.Errorf("failed to query total backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query total backends: %w", err)
 	}
 
 	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
 	if err != nil {
-		return -1, -1, fmt.Errorf("failed to query online backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query online backends: %w", err)
 	}
 
-	return online, total, nil
+	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'SHUNNED'").Scan(&shunned)
+	if err != nil {
+		return -1, -1, -1, fmt.Errorf("failed to query shunned backends: %w", err)
+	}
+
+	return total, online, shunned, nil
 }
