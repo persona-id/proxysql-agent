@@ -35,6 +35,8 @@ type Config struct {
 	Log struct {
 		Level  string `mapstructure:"level"`
 		Format string `mapstructure:"format"`
+		Source bool   `mapstructure:"source"`
+		Probes bool   `mapstructure:"probes"`
 	} `mapstructure:"log"`
 	RunMode string `mapstructure:"run_mode"`
 	Core    struct {
@@ -159,6 +161,8 @@ func setupDefaults() {
 	viper.GetViper().SetDefault("start_delay", 0)
 	viper.GetViper().SetDefault("log.level", "INFO")
 	viper.GetViper().SetDefault("log.format", "text")
+	viper.GetViper().SetDefault("log.source", false)
+	viper.GetViper().SetDefault("log.probes", false)
 	viper.GetViper().SetDefault("run_mode", nil)
 
 	// use the dot notation to access nested values
@@ -185,6 +189,9 @@ func setupFlags() error {
 	pflag.Int("start_delay", 0, "seconds to pause before starting agent")
 	pflag.String("log.level", "INFO", "the log level for the agent; defaults to INFO")
 	pflag.String("log.format", "JSON", "Format of the logs; valid values: [JSON OR plain]")
+	pflag.Bool("log.source", false, "Include source code location in the logs")
+	pflag.Bool("log.probes", false, "Include probe results in the logs")
+
 	pflag.String("run_mode", "", "mode to run the agent in; valid values: [core OR satellite]")
 
 	pflag.String("proxysql.address", "127.0.0.1:6032", "proxysql admin interface address")
@@ -192,7 +199,6 @@ func setupFlags() error {
 	pflag.String("proxysql.password", "radmin", "password for the proxysql admin interface; this is not recommended for use in production")
 
 	pflag.Int("core.interval", 10, "seconds to sleep in the core clustering loop") //nolint:mnd
-	pflag.String("core.checksum_file", "/tmp/pods-cs.txt", "path to the pods checksum file")
 	pflag.String("core.podselector.namespace", "proxysql", "namespace to use in the k8s pod selector label")
 	pflag.String("core.podselector.app", "proxysql", "app to use in the k8s pod selector label")
 	pflag.String("core.podselector.component", "core", "component to use in the k8s pod selector label")
@@ -262,13 +268,13 @@ func setupLogger(settings *Config) {
 
 	if settings.Log.Format == "JSON" {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			AddSource:   (level == slog.LevelDebug), // only add source if debug level is set, but maybe in prod we'd want this
+			AddSource:   settings.Log.Source,
 			Level:       level,
 			ReplaceAttr: nil,
 		})
 	} else {
 		handler = tint.NewHandler(os.Stdout, &tint.Options{
-			AddSource:   (level == slog.LevelDebug), // only add source if debug level is set, but maybe in prod we'd want this
+			AddSource:   settings.Log.Source,
 			Level:       level,
 			NoColor:     false,
 			ReplaceAttr: nil,
@@ -321,6 +327,8 @@ func logDebugInfo(settings *Config) {
 			slog.String("run_mode", settings.RunMode),
 			slog.String("log.level", settings.Log.Level),
 			slog.String("log.format", settings.Log.Format),
+			slog.Bool("log.source", settings.Log.Source),
+			slog.Bool("log.probes", settings.Log.Probes),
 			slog.Int("start_delay", settings.StartDelay),
 			slog.String("proxysql.address", settings.ProxySQL.Address),
 			slog.String("proxysql.username", settings.ProxySQL.Username),

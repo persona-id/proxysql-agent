@@ -17,6 +17,8 @@ start_delay: 30
 log:
   level: "TRACE"
   format: "text"
+  source: true
+  probes: false
 run_mode: core
 proxysql:
   address: "proxysql.vip:6032"
@@ -112,6 +114,8 @@ func TestDefaults(t *testing.T) {
 		{"StartDelay", 0, config.StartDelay},
 		{"Log.Level", "INFO", config.Log.Level},
 		{"Log.Format", "text", config.Log.Format},
+		{"Log.Source", false, config.Log.Source},
+		{"Log.Probes", false, config.Log.Probes},
 		{"ProxySQL.Address", "127.0.0.1:6032", config.ProxySQL.Address},
 		{"ProxySQL.Username", "radmin", config.ProxySQL.Username},
 		{"Core.Interval", 10, config.Core.Interval},
@@ -173,6 +177,8 @@ func TestConfigFile(t *testing.T) {
 		{"StartDelay", 30, config.StartDelay},
 		{"Log.Level", "TRACE", config.Log.Level},
 		{"Log.Format", "text", config.Log.Format},
+		{"Log.Source", true, config.Log.Source},
+		{"Log.Probes", false, config.Log.Probes},
 		{"RunMode", "core", config.RunMode},
 		{"ProxySQL.Address", "proxysql.vip:6032", config.ProxySQL.Address},
 		{"ProxySQL.Username", "agent-user", config.ProxySQL.Username},
@@ -199,6 +205,8 @@ func TestEnvironment(t *testing.T) {
 		"AGENT_START_DELAY":                "500",
 		"AGENT_LOG_LEVEL":                  "env-WARN",
 		"AGENT_LOG_FORMAT":                 "env-text",
+		"AGENT_LOG_SOURCE":                 "true",
+		"AGENT_LOG_PROBES":                 "true",
 		"AGENT_RUN_MODE":                   "satellite",
 		"AGENT_PROXYSQL_ADDRESS":           "env-proxysql:6666",
 		"AGENT_PROXYSQL_USERNAME":          "env-proxysql-user",
@@ -235,6 +243,8 @@ func TestEnvironment(t *testing.T) {
 		{"StartDelay", 500, config.StartDelay},
 		{"Log.Level", "env-WARN", config.Log.Level},
 		{"Log.Format", "env-text", config.Log.Format},
+		{"Log.Source", true, config.Log.Source},
+		{"Log.Probes", true, config.Log.Probes},
 		{"RunMode", "satellite", config.RunMode},
 		{"ProxySQL.Address", "env-proxysql:6666", config.ProxySQL.Address},
 		{"ProxySQL.Username", "env-proxysql-user", config.ProxySQL.Username},
@@ -261,6 +271,8 @@ func TestFlags(t *testing.T) {
 		"--start_delay=415",
 		"--log.level=ERROR",
 		"--log.format=text",
+		"--log.source=true",
+		"--log.probes=false",
 		"--run_mode=core",
 		"--proxysql.address=86.75.30.9:9999",
 		"--proxysql.username=nick",
@@ -292,6 +304,8 @@ func TestFlags(t *testing.T) {
 		{"StartDelay", 415, config.StartDelay},
 		{"Log.Level", "ERROR", config.Log.Level},
 		{"Log.Format", "text", config.Log.Format},
+		{"Log.Source", true, config.Log.Source},
+		{"Log.Probes", false, config.Log.Probes},
 		{"RunMode", "core", config.RunMode},
 		{"ProxySQL.Address", "86.75.30.9:9999", config.ProxySQL.Address},
 		{"ProxySQL.Username", "nick", config.ProxySQL.Username},
@@ -593,9 +607,13 @@ func TestSetupLoggerLevels(t *testing.T) {
 				Log: struct {
 					Level  string `mapstructure:"level"`
 					Format string `mapstructure:"format"`
+					Source bool   `mapstructure:"source"`
+					Probes bool   `mapstructure:"probes"`
 				}{
 					Level:  tt.logLevel,
 					Format: tt.format,
+					Source: false,
+					Probes: false,
 				},
 			}
 
@@ -662,9 +680,13 @@ func TestLogDebugInfo(t *testing.T) {
 		Log: struct {
 			Level  string `mapstructure:"level"`
 			Format string `mapstructure:"format"`
+			Source bool   `mapstructure:"source"`
+			Probes bool   `mapstructure:"probes"`
 		}{
 			Level:  "DEBUG",
 			Format: "text",
+			Source: false,
+			Probes: false,
 		},
 		RunMode:    "core",
 		StartDelay: 5,

@@ -52,9 +52,13 @@ func newTestConfig() *configuration.Config {
 		Log: struct {
 			Level  string `mapstructure:"level"`
 			Format string `mapstructure:"format"`
+			Source bool   `mapstructure:"source"`
+			Probes bool   `mapstructure:"probes"`
 		}{
 			Level:  "INFO",
 			Format: "text",
+			Source: false,
+			Probes: false,
 		},
 		ProxySQL: struct {
 			Address  string `mapstructure:"address"`

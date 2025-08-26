@@ -17,10 +17,10 @@ import (
 // Returns the server instance for graceful shutdown.
 func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz/started", startupHandler(p))
-	mux.HandleFunc("/healthz/ready", readinessHandler(p))
-	mux.HandleFunc("/healthz/live", livenessHandler(p))
-	mux.HandleFunc("/shutdown", preStopHandler(p))
+	mux.HandleFunc("/healthz/started", startupHandler(p, settings))
+	mux.HandleFunc("/healthz/ready", readinessHandler(p, settings))
+	mux.HandleFunc("/healthz/live", livenessHandler(p, settings))
+	mux.HandleFunc("/shutdown", preStopHandler(p, settings))
 
 	port := fmt.Sprintf(":%d", settings.API.Port)
 
@@ -54,8 +54,8 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 // The handler checks the liveness of the ProxySQL instance by running probes and returning the results in JSON format.
 // If the probes fail, it returns a 503 Service Unavailable status code.
 // If the probes pass, it returns a 200 OK status code.
-// The livenessHandler also logs the status check result for debugging purposes.
-func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
+// The livenessHandler also logs the status check result for debugging purposes, if log.probes is true.
+func livenessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -114,7 +114,9 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
 
-		slog.Debug("status check", slog.String("json", string(resultJSON)))
+		if settings.Log.Probes {
+			slog.Debug("status check", slog.Any("results", results))
+		}
 	}
 }
 
@@ -138,7 +140,7 @@ func livenessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // The main caveat here is we'd need the right username, which is apparently hashed in the proxysql db now. I did confirm
 // that even if a backend is offline, connections to proxysql are accepted; in other words, unless proxysql is paused
 // connections to the serving port with the right creds will succeed.
-func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
+func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -197,7 +199,10 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 		// nosemgrep:go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
 
-		slog.Debug("status check", slog.String("json", string(resultJSON)))
+		// only log the probe results if the setting is enabled AND debug mode is enabled
+		if settings.Log.Probes {
+			slog.Debug("status check", slog.Any("results", results))
+		}
 	}
 }
 
@@ -205,7 +210,7 @@ func readinessHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 // unhealthy if there are missing backends. We just want to ensure that proxysql
 // is up and listening. This also has the _intended_ side effect of ensuring that
 // the mysql connection to the admin port is open.
-func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
+func startupHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -227,7 +232,7 @@ func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 }
 
 // preStopHandler is an HTTP request handler function that handles the prestop shutdown endpoint.
-func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
+func preStopHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		err := psql.PreStopShutdown()
 		if err != nil {
@@ -244,6 +249,7 @@ func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+
 		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, `{"message": "shutdown initiated", "status": "ok"}`)
 	}

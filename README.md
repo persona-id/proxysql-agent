@@ -4,7 +4,7 @@
 
 ## About
 
-The ProxySQL agent is a small, statically compiled go binary for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster, for use as a kubernetes sidecar container. The repo includes a [Dockerfile](build/Dockerfile) to generate an alpine based image, or you can use the version in the [GitHub Container Registry]().
+The ProxySQL agent is a small, statically compiled Go binary (Go 1.25) for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster, primarily designed as a Kubernetes sidecar container. The repo includes a [Dockerfile](build/Dockerfile) to generate a debian-based image, or you can use the version in the [GitHub Container Registry](https://github.com/persona-id/proxysql-agent/pkgs/container/proxysql-agent).
 
 There exists relatively little tooling around ProxySQL, so we hope that this is useful to others out there, even if it's just to learn how to maintain a cluster.
 
@@ -33,24 +33,93 @@ We wanted to avoid having to install a bunch of ruby gems in the container, so w
 
 Because k8s tooling is generally written in Golang, the ruby k8s gems didn't seem to be as maintained or as easy to use as the golang libraries. And because the go process is statically compiled, and we won't need to deal with a bunch of external dependencies at runtime.
 
+## Run Modes
+
+The agent supports three run modes:
+
+- **`core`** - Core pods maintain cluster state and configuration
+- **`satellite`** - Satellite pods receive configuration from core pods
+- **`dump`** - One-time export of ProxySQL statistics data to CSV files
+
 ## Design
 
 In the [example repo](https://github.com/kuzmik/local-proxysql), there are two separate deployments; the `core` and the `satellite` deployments. The agent is responsible for maintaining the state of this cluster.
 
 ![image](assets/infra.png)
 
-On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:6032` (default address). It will maintain the connection throughout the life of the pod, and will periodicially run the commands necessary to maintain the cluster, depending on the run mode specified on boot.
+On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:6032` (default address). It will maintain the connection throughout the life of the pod, and will periodically run the commands necessary to maintain the cluster, depending on the run mode specified on boot.
 
-Additionally, the agent also exposes a simple HTTP API used for k8s health checks for the pod, as well as the /shutdown endpoint, which can be used in a `container.lifecycle.preStop.httpGet` hook to gracefully drain traffic from a pod before stopping it.
+## HTTP API
+
+The agent exposes several HTTP endpoints (default port 8080):
+
+- **`/healthz/started`** - Startup probe (simple ping to ProxySQL admin interface)
+- **`/healthz/ready`** - Readiness probe (comprehensive health checks, returns 503 when draining)
+- **`/healthz/live`** - Liveness probe (health checks, remains healthy during graceful shutdown)
+- **`/shutdown`** - Graceful shutdown endpoint for `container.lifecycle.preStop.httpGet` hooks
+
+All health endpoints return JSON responses with detailed status information including backend server states, connection counts, and draining status.
+
+## Signal Handling
+
+The agent responds to Unix signals for operational control:
+
+- **`SIGTERM/SIGINT`** - Initiates graceful shutdown
+- **`SIGUSR1`** - Dumps current ProxySQL status and statistics to logs
+- **`SIGUSR2`** - Reserved for future config reload functionality
+
+## Configuration
+
+The agent uses a sophisticated configuration system built on [Viper](https://github.com/spf13/viper) with multiple configuration sources in order of precedence:
+
+1. Defaults set in code
+2. Configuration file (YAML format, `config.yaml` or specified via `AGENT_CONFIG_FILE` env var)
+3. Environment variables (prefixed with `AGENT_`, e.g., `AGENT_PROXYSQL_ADDRESS`)
+4. Command-line flags
+
+Key configuration options include:
+- ProxySQL admin interface connection details
+- Run mode (`core`, `satellite`, or `dump`)
+- Kubernetes pod selector for cluster discovery
+- HTTP API port and settings
+- Logging configuration (level, format, structured logging)
+- Graceful shutdown timeouts
+
+See the included [`config.yaml`](config.yaml) for a complete configuration example.
+
+## Development
+
+### Building
+
+```bash
+# Build binary
+make build
+
+# Run tests with race detection
+make test
+
+# Full validation pipeline
+make check
+
+# Generate coverage report
+make coverage
+```
+
+### Running Locally
+
+```bash
+# Run in satellite mode with debug logging
+make run
+```
+
+Note: Local development requires a running ProxySQL instance. See the `docker-compose.yml` for a local development setup.
 
 ## TODOs
 
-There are some internal linear tickets, but here's a high level overview of what we have in mind.
-
-- *P3* - HTTP API for controlling the agent. Much to do here, many ideas
-  - get proxysql admin status
-  - force a satellite resync (if running in satellite mode)
-  - etc
+- *P3* - Expand HTTP API for operational control
+  - Enhanced cluster status endpoints
+  - Force satellite resync capability
+  - Runtime configuration updates
 
 ### Done
 
@@ -65,19 +134,28 @@ There are some internal linear tickets, but here's a high level overview of what
 1. ✅ Health checks via an HTTP endpoint, specifically for the ProxySQL container
 1. ✅ Pre-stop hook replacement
 
-## Releasing a new version
+## Releases
 
-We are using [goreleaser](https://goreleaser.com/), so it's as simple as pushing to a new tag:
+The project uses automated releases with [goreleaser](https://goreleaser.com/). Current version: **1.1.7**
+
+To create a new release:
 
 1. `git tag vX.X.X`
 1. `git push origin vX.X.X`
 
-This will cause goreleaser to run and output the artifacts; currently we are only shipping a linux amd64 binary and a Docker image.
+This triggers goreleaser to build and publish:
+- Linux AMD64 binary
+- Multi-architecture Docker images
+- GitHub release with changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and recent updates.
 
 ## See also
 
-Libraries in use:
+### Key Dependencies
 
-* [k8s-client-go](https://github.com/kubernetes/client-go) - Golang k8s client
-* [slog](https://pkg.go.dev/log/slog) ([examples](https://betterstack.com/community/guides/logging/logging-in-go/)) - log/slog
-* [Viper](https://pkg.go.dev/github.com/spf13/viper) - Go configuration library; allows config from a file, ENV, or commandline flags
+- [go-sql-driver/mysql](https://github.com/go-sql-driver/mysql) - MySQL driver for ProxySQL admin interface
+- [k8s-client-go](https://github.com/kubernetes/client-go) - Kubernetes API client for cluster discovery
+- [slog](https://pkg.go.dev/log/slog) - Structured logging with JSON and text output formats
+- [tint](https://github.com/lmittmann/tint) - Pretty console logging for development
+- [viper](https://pkg.go.dev/github.com/spf13/viper) - Configuration management with file, ENV, and flag support
