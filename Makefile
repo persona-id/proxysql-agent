@@ -14,7 +14,7 @@ check: fmt lint test ## Run formatting (via golangci-lint), vetting (also via go
 
 clean: ## Clean build artifacts and coverage files
 	@go clean
-	@rm -rf coverage $(BINARY)
+	@rm -rf dist coverage $(BINARY)
 
 coverage: ## Generate test coverage report
 	@mkdir -p coverage
