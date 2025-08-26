@@ -1,7 +1,6 @@
 package restapi
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +8,46 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/persona-id/proxysql-agent/internal/configuration"
 	"github.com/persona-id/proxysql-agent/internal/proxysql"
 )
+
+// StartAPI starts the HTTP server for the ProxySQL agent.
+// It registers the necessary handlers for health checks and starts listening on the specified port.
+// Returns the server instance for graceful shutdown.
+func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz/started", startupHandler(p))
+	mux.HandleFunc("/healthz/ready", readinessHandler(p))
+	mux.HandleFunc("/healthz/live", livenessHandler(p))
+	mux.HandleFunc("/shutdown", preStopHandler(p))
+
+	port := fmt.Sprintf(":%d", settings.API.Port)
+
+	// Create a server with reasonable timeouts
+	server := &http.Server{
+		Addr:              port,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second, //nolint:mnd
+		WriteTimeout:      10 * time.Second, //nolint:mnd
+		IdleTimeout:       30 * time.Second, //nolint:mnd
+		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
+	}
+
+	slog.Info("Starting HTTP server", slog.String("port", port))
+
+	go func() {
+		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
+		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+		err := server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("Error starting the HTTP server", slog.Any("err", err))
+			panic(err)
+		}
+	}()
+
+	return server
+}
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.
 // It returns a http.HandlerFunc that can be used to handle HTTP requests.
@@ -189,63 +226,25 @@ func startupHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
 	}
 }
 
+// preStopHandler is an HTTP request handler function that handles the prestop shutdown endpoint.
 func preStopHandler(psql *proxysql.ProxySQL) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Return success response
+	return func(w http.ResponseWriter, _ *http.Request) {
+		err := psql.PreStopShutdown()
+		if err != nil {
+			// Log error but still return success since this is a prestop hook
+			slog.Error("prestop shutdown failed", slog.Any("error", err))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+
+			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
+			fmt.Fprint(w, `{"message": "shutdown failed", "status": "error"}`)
+
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-
-		psql.PreStopShutdown(r.Context())
-	}
-}
-
-// StartAPI starts the HTTP server for the ProxySQL agent.
-// It registers the necessary handlers for health checks and starts listening on the specified port.
-// Returns the server instance for graceful shutdown.
-func StartAPI(p *proxysql.ProxySQL) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz/started", startupHandler(p))
-	mux.HandleFunc("/healthz/ready", readinessHandler(p))
-	mux.HandleFunc("/healthz/live", livenessHandler(p))
-	mux.HandleFunc("/shutdown", preStopHandler(p))
-
-	// FIXME: make this configurable
-	port := ":8080"
-
-	// Create a server with reasonable timeouts
-	server := &http.Server{ //nolint:exhaustruct
-		Addr:              port,
-		Handler:           mux,
-		ReadTimeout:       10 * time.Second, //nolint:mnd
-		WriteTimeout:      10 * time.Second, //nolint:mnd
-		IdleTimeout:       30 * time.Second, //nolint:mnd
-		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
-	}
-
-	slog.Info("Starting HTTP server", slog.String("port", port))
-
-	go func() {
-		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
-		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
-		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("Error starting the HTTP server", slog.Any("err", err))
-			panic(err)
-		}
-	}()
-
-	return server
-}
-
-// ShutdownServer gracefully shuts down the HTTP server.
-func ShutdownServer(server *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) //nolint:mnd
-	defer cancel()
-
-	slog.Info("Shutting down HTTP server")
-
-	err := server.Shutdown(ctx)
-	if err != nil {
-		slog.Error("Error shutting down HTTP server", slog.Any("err", err))
+		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
+		fmt.Fprint(w, `{"message": "shutdown initiated", "status": "ok"}`)
 	}
 }

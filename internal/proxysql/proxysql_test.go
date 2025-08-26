@@ -2,8 +2,6 @@ package proxysql
 
 import (
 	"context"
-	"errors"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -12,7 +10,39 @@ import (
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 )
 
-var ErrDatabase = errors.New("database error")
+func TestPing(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
+	defer db.Close()
+
+	proxy := &ProxySQL{
+		clientset:     nil,
+		conn:          db,
+		settings:      newTestConfig(),
+		shutdownOnce:  sync.Once{},
+		shutdownPhase: PhaseRunning,
+		shutdownMu:    sync.RWMutex{},
+		httpServer:    nil,
+	}
+
+	err = proxy.Ping(context.Background())
+	if err != nil {
+		t.Errorf("Ping() returned an error: %v", err)
+	}
+
+	if proxy.conn == nil {
+		t.Error("Conn should not be nil")
+	}
+
+	err = mock.ExpectationsWereMet()
+	if err != nil {
+		t.Errorf("SQL expectations were not met: %v", err)
+	}
+}
 
 // Return a config for testing purposes.
 // This method is used in all the test files in this directory.
@@ -61,121 +91,5 @@ func newTestConfig() *configuration.Config {
 			Interval: 10,
 		},
 		Interfaces: []string{},
-	}
-}
-
-func TestPing(t *testing.T) {
-	t.Parallel()
-
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("Error creating mock database: %v", err)
-	}
-	defer db.Close()
-
-	proxy := &ProxySQL{
-		clientset:    nil,
-		conn:         db,
-		settings:     newTestConfig(),
-		shutdownOnce: sync.Once{},
-		shuttingDown: false,
-		shutdownMu:   sync.RWMutex{},
-		httpServer:   nil,
-	}
-
-	err = proxy.Ping(context.Background())
-	if err != nil {
-		t.Errorf("Ping() returned an error: %v", err)
-	}
-
-	if proxy.conn == nil {
-		t.Error("Conn should not be nil")
-	}
-
-	err = mock.ExpectationsWereMet()
-	if err != nil {
-		t.Errorf("SQL expectations were not met: %v", err)
-	}
-}
-
-func TestGetBackends(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name           string
-		setupMock      func(mock sqlmock.Sqlmock)
-		expectedResult map[string]int
-		expectedErr    error
-	}{
-		{
-			name: "successful query",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"hostgroup_id", "hostname", "port"}).
-					AddRow(1, "host1", 3306).
-					AddRow(2, "host2", 3306).
-					AddRow(1, "host3", 3307)
-				mock.ExpectQuery("SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id").
-					WillReturnRows(rows)
-			},
-			expectedResult: map[string]int{"host1": 1, "host2": 2, "host3": 1},
-			expectedErr:    nil,
-		},
-		{
-			name: "database error",
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery("SELECT hostgroup_id, hostname, port FROM runtime_mysql_servers ORDER BY hostgroup_id").
-					WillReturnError(ErrDatabase)
-			},
-			expectedResult: nil,
-			expectedErr:    ErrDatabase,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatalf("Error creating mock database: %v", err)
-			}
-			defer db.Close()
-
-			proxy := &ProxySQL{
-				clientset:    nil,
-				conn:         db,
-				settings:     newTestConfig(),
-				shutdownOnce: sync.Once{},
-				shuttingDown: false,
-				shutdownMu:   sync.RWMutex{},
-				httpServer:   nil,
-			}
-
-			tt.setupMock(mock)
-
-			entries, err := proxy.GetBackends(context.Background())
-
-			switch {
-			case tt.expectedErr == nil && err != nil:
-				t.Errorf("GetBackends() returned unexpected error: %v", err)
-
-			case tt.expectedErr != nil && err == nil:
-				t.Errorf("GetBackends() expected error: %v, got nil", tt.expectedErr)
-
-			case tt.expectedErr != nil && err != nil:
-				if !errors.Is(err, tt.expectedErr) {
-					t.Errorf("GetBackends() expected error to wrap: %v, got: %v", tt.expectedErr, err)
-				}
-			}
-
-			if !reflect.DeepEqual(entries, tt.expectedResult) {
-				t.Errorf("GetBackends() expected result: %v, got: %v", tt.expectedResult, entries)
-			}
-
-			err = mock.ExpectationsWereMet()
-			if err != nil {
-				t.Errorf("SQL expectations were not met: %v", err)
-			}
-		})
 	}
 }

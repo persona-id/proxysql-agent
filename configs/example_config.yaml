@@ -1,4 +1,4 @@
-# This application uses viper for configuration. Within viper there is a concept of overriding 
+# This application uses viper for configuration. Within viper there is a concept of overriding
 # configuration. The order of precedence in these methods is as follows:
 #   1. Defaults set in the Configure() function
 #   2. Config file contens
@@ -39,7 +39,7 @@ core:
   #       metadata:
   #         labels:
   #           app: proxysql
-  #           component: core  
+  #           component: core
   podselector:
     # Defaults to proxysql
     namespace: proxysql
@@ -52,3 +52,10 @@ core:
 satellite:
   # The number of seconds to pause in the loop; defaults to 10
   interval: 10
+
+# HTTP API configuration
+api:
+  # Port for the HTTP API server; defaults to 8080
+  port: 8080
+  # Path to the draining status file; defaults to /var/lib/proxysql/draining
+  draining_file: "/var/lib/proxysql/draining"

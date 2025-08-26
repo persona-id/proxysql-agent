@@ -29,7 +29,7 @@ We looked into using ruby, and in fact the "agents" we are currently running **a
 - If the ProxySQL admin interface gets wedged, the ruby and mysl processes still continue to spawn and spin, which will eventually lead to either inode exhaustion or a container OOM
   - The scheduler spawns a new ruby process every 10s
     - Each ruby process shells out to the mysql binary several times times per script invocation
-  - In addition to the scheduler process, the health probes is a separate ruby script that also spawns several mysql processes per run 
+  - In addition to the scheduler process, the health probes is a separate ruby script that also spawns several mysql processes per run
     - Two script invocations every 10s, one for liveness and one for readiness
 
 We wanted to avoid having to install a bunch of ruby gems in the container, so we decided shelling out to mysql was fine; we got most of the patterns from existing ProxySQL tooling and figured it'd work short term. And it has worked fine, though there have been enough instances of OOM'd containers that it's become worrisome. This usually happens if someone is in a pod doing any kind of work (modifying mysql query rules, etc), but we haven't been able to figure out what causes the admin interface to become wedged.
@@ -43,7 +43,7 @@ In the [example repo](https://github.com/kuzmik/local-proxysql), there are two s
 
 ![image](docs/infra.png)
 
-On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:6032` (default address). It will maintain the connection throughout the life of the pod, and will periodicially run the commands necessary to maintain the cluster, depending on the run mode specified on boot. 
+On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:6032` (default address). It will maintain the connection throughout the life of the pod, and will periodicially run the commands necessary to maintain the cluster, depending on the run mode specified on boot.
 
 Additionally, the agent also exposes a simple HTTP API used for k8s health checks for the pod, as well as the /shutdown endpoint, which can be used in a `container.lifecycle.preStop.httpGet` hook to gracefully drain traffic from a pod before stopping it.
 
@@ -53,25 +53,11 @@ Additionally, the agent also exposes a simple HTTP API used for k8s health check
 There are some internal linear tickets, but here's a high level overview of what we have in mind.
 
 - *P2* - Better test coverage
-- *P3* - Leader election; elect one core pod and have it be responsible for managing cluster state
-- *P3* - "plugin" support; we don't necessarily need to add all the Persona specific cases to the main agent, as they won't likely apply to most people
-  - "chaosmonkey" feature
-    - feature branch currently has it as included in the main agent, but I will extract it later
-  - uploading of the CSV dump files to snowflake (likely GCS in this case)
-- *P5* - HTTP API for controlling the agent. Much to do here, many ideas
+- *P3* - HTTP API for controlling the agent. Much to do here, many ideas
   - get proxysql admin status
   - force a satellite resync (if running in satellite mode)
   - etc
   - Now I'm no sure this is that important; we can just add more commands to the agent, and run said commands from the CLI
-- *P5* - If possible, cleanup the errors that are thrown when the `preStop` hook runs. This might not be possible due to how k8s kills containers, but if it is, these errors need to go away:
-    ```
-    time=2023-11-29T02:32:22.422Z level=INFO msg="Pre-stop called, starting shutdown process" shutdownDelay=120
-    time=2023-11-29T02:32:24.341Z level=INFO msg="Pre-stop commands ran" commands="UPDATE global_variables SET variable_value = 120000 WHERE variable_name in ('mysql-connection_max_age_ms', 'mysql-max_transaction_idle_time', 'mysql-max_transaction_time'); UPDATE global_variables SET variable_value = 1 WHERE variable_name = 'mysql-wait_timeout'; LOAD MYSQL VARIABLES TO RUNTIME; PROXYSQL PAUSE;"
-    time=2023-11-29T02:32:24.343Z level=INFO msg="No connected clients remaining, proceeding with shutdown"
-    [mysql] 2023/11/29 02:32:24 packets.go:37: unexpected EOF
-    time=2023-11-29T02:32:24.348Z level=ERROR msg="KILL command failed" commands="PROXYSQL KILL" error="invalid connection"
-    rpc error: code = Unknown desc = Error: No such container: e3153c34e0ad525c280dd26695b78d917b1cb377a545744bffb9b31ad1c90670%
-    ```
 
 ### Done
 
@@ -94,7 +80,7 @@ We are using [goreleaser](https://goreleaser.com/), so it's as simple as pushing
 1. `git tag vX.X.X`
 1. `git push origin vX.X.X`
 
-This will cause goreleaser to run and output the artifacts; currently we are only shipping a linuix amd64 binary and a Docker image.
+This will cause goreleaser to run and output the artifacts; currently we are only shipping a linux amd64 binary and a Docker image.
 
 ## See also
 
@@ -103,8 +89,3 @@ Libraries in use:
 * [k8s-client-go](https://github.com/kubernetes/client-go) - Golang k8s client
 * [slog](https://pkg.go.dev/log/slog) ([examples](https://betterstack.com/community/guides/logging/logging-in-go/)) - log/slog
 * [Viper](https://pkg.go.dev/github.com/spf13/viper) - Go configuration library; allows config from a file, ENV, or commandline flags
-
-Misc:
-
-* Look into possibly using [nacelle](https://www.nacelle.dev/docs/topics/overview/) down the road
-* Some leader election examples: [golang-k8s-leader-example](https://github.com/mjasion/golang-k8s-leader-example)

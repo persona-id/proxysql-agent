@@ -5,7 +5,7 @@ RUN groupadd -r agent \
 
 RUN apt-get update && apt-get install -y bash && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY --chown=agent:agent --chmod=700 configs/config.yaml proxysql-agent /app/
+COPY --chown=agent:agent --chmod=700 configs/example_config.yaml proxysql-agent /app/config.yaml
 
 WORKDIR /app
 

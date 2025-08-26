@@ -2,7 +2,6 @@ package proxysql
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,8 +19,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
-
-var ErrCacheTimeout = errors.New("timed out waiting for caches to sync")
 
 // ProxySQL core functions.
 //
@@ -43,18 +40,16 @@ var ErrCacheTimeout = errors.New("timed out waiting for caches to sync")
 //   - When a satellite pod leaves the cluster, nothing needs to be done.
 //   - When a core pod leaves the cluster, the remaining core pods all delete that pod from the proxysql_servers
 //     table and run all of the LOAD X TO RUNTIME commands.
-func (p *ProxySQL) Core(ctx context.Context) {
+func (p *ProxySQL) Core(ctx context.Context) error {
 	if p.clientset == nil {
 		config, err := rest.InClusterConfig()
 		if err != nil {
-			slog.Error("error", slog.Any("err", err))
-			panic(err)
+			return fmt.Errorf("failed to get in-cluster config: %w", err)
 		}
 
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
-			slog.Error("error", slog.Any("err", err))
-			panic(err)
+			return fmt.Errorf("failed to create kubernetes clientset: %w", err)
 		}
 
 		p.clientset = clientset
@@ -76,13 +71,33 @@ func (p *ProxySQL) Core(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			slog.Info("Context cancelled, stopping core informer")
-			p.startDraining()
+
+			var shutdownErr error
+
+			p.shutdownOnce.Do(func() { //nolint:contextcheck
+				err := p.startDraining()
+				if err != nil {
+					slog.Error("Failed to start draining", slog.Any("error", err))
+					shutdownErr = err
+				}
+
+				// Perform graceful shutdown
+				err = p.gracefulShutdown(context.Background())
+				if err != nil {
+					slog.Error("Core graceful shutdown failed", slog.Any("error", err))
+
+					if shutdownErr == nil {
+						shutdownErr = err
+					}
+				}
+			})
 
 			select {
 			case <-stopper:
 			default:
 				close(stopper)
 			}
+
 		case <-stopper:
 			return
 		}
@@ -111,9 +126,7 @@ func (p *ProxySQL) Core(ctx context.Context) {
 	go factory.Start(stopper)
 
 	if !cache.WaitForCacheSync(stopper, podInformer.HasSynced) {
-		runtime.HandleError(ErrCacheTimeout)
-
-		return
+		return ErrCacheTimeout
 	}
 
 	_, err := podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -122,12 +135,13 @@ func (p *ProxySQL) Core(ctx context.Context) {
 		DeleteFunc: nil,
 	})
 	if err != nil {
-		slog.Error("Error creating Informer", slog.Any("err", err))
-		panic(err)
+		return fmt.Errorf("failed to add event handler to pod informer: %w", err)
 	}
 
 	// block the main go routine from exiting
 	<-stopper
+
+	return nil
 }
 
 // This function is needed to do bootstrapping. At first I was using podUpdated to do adds, but we would never
@@ -158,7 +172,10 @@ func (p *ProxySQL) podAdded(object any) {
 
 	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
 	if err != nil {
-		slog.Error("Error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+		// Log the error but continue execution since this is a callback function
+		slog.Error("error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+
+		return
 	}
 
 	if count > 0 {
@@ -167,7 +184,8 @@ func (p *ProxySQL) podAdded(object any) {
 
 	err = p.addPodToCluster(ctx, pod)
 	if err != nil {
-		slog.Error("Error in podAdded()", slog.Any("err", err))
+		// Log the error but continue execution since this is a callback function
+		slog.Error("error in podAdded()", slog.Any("err", err))
 	}
 }
 
@@ -182,7 +200,8 @@ func (p *ProxySQL) podAdded(object any) {
 //	proxysql-core-1						Pending 	proxysql-core-1 	192.168.194.102 	Running
 //	proxysql-core-1	192.168.194.102 	Running 	proxysql-core-1  						Failed
 func (p *ProxySQL) podUpdated(oldobject, newobject any) {
-	ctx := context.Background() // Use background context for event handlers
+	ctx := context.Background()
+
 	// cast both objects into Pods, and if that fails leave the function
 	oldpod, ok := oldobject.(*v1.Pod)
 	if !ok {
@@ -198,7 +217,8 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	if oldpod.Status.Phase == "Pending" && newpod.Status.Phase == "Running" {
 		err := p.addPodToCluster(ctx, newpod)
 		if err != nil {
-			slog.Error("Error in addPod()", slog.Any("err", err))
+			// Log the error but continue execution since this is a callback function
+			slog.Error("error in addPod()", slog.Any("err", err))
 		}
 	}
 
@@ -207,7 +227,8 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	if oldpod.Status.Phase == "Running" && newpod.Status.Phase == "Failed" {
 		err := p.removePodFromCluster(ctx, oldpod)
 		if err != nil {
-			slog.Error("Error in removePod()", slog.Any("err", err))
+			// Log the error but continue execution since this is a callback function
+			slog.Error("error in removePod()", slog.Any("err", err))
 		}
 	}
 }
@@ -216,14 +237,27 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 //   - If it's a core pod, add it to the proxysql_servers table
 //   - if it's a satellite pod, run the commands to accept it to the cluster
 func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
-	slog.Info("Pod joined the cluster", slog.String("name", pod.Name), slog.String("ip", pod.Status.PodIP))
+	if p.IsShuttingDown() {
+		slog.Debug("skipping add pod to cluster: shutting down")
+
+		return nil
+	}
+
+	slog.Info("pod joined cluster",
+		slog.String("name", pod.Name),
+		slog.String("ip", pod.Status.PodIP),
+	)
 
 	commands := []string{"DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'"}
 
 	// If the new pod is a core pod, delete the default entries in the proxysql_server list and add the new pod to it.
 	if pod.Labels["component"] == "core" {
-		// TODO: maybe make this configurable, not everyone will name the service this.
-		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES (%q, 6032, 0, %q)", pod.Status.PodIP, pod.Name))
+		port, err := p.settings.ClusterPort()
+		if err != nil {
+			return fmt.Errorf("failed to get cluster port: %w", err)
+		}
+
+		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES (%q, %d, 0, %q)", pod.Status.PodIP, port, pod.Name))
 	}
 
 	commands = append(commands,
@@ -236,13 +270,19 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 	)
 
 	for _, command := range commands {
+		if p.IsShuttingDown() {
+			slog.Debug("skipping command during shutdown", slog.String("command", command))
+
+			return nil
+		}
+
 		_, err := p.conn.ExecContext(ctx, command)
 		if err != nil {
 			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}
 	}
 
-	slog.Debug("Ran commands", slog.Any("commands", strings.Join(commands, ", ")))
+	slog.Debug("ran commands", slog.Any("commands", strings.Join(commands, ", ")))
 
 	return nil
 }
@@ -251,7 +291,16 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 // proxysql_servers based on the hostname (PodIP here, technically). The function then runs all the
 // LOAD TO RUNTIME commands required to sync state to the rest of the cluster.
 func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error {
-	slog.Info("Pod left the cluster", slog.String("name", pod.Name), slog.String("ip", pod.Status.PodIP))
+	if p.IsShuttingDown() {
+		slog.Debug("skipping remove pod from cluster: shutting down")
+
+		return nil
+	}
+
+	slog.Info("pod exited cluster",
+		slog.String("name", pod.Name),
+		slog.String("ip", pod.Status.PodIP),
+	)
 
 	commands := []string{}
 
@@ -269,13 +318,19 @@ func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error 
 	)
 
 	for _, command := range commands {
+		if p.IsShuttingDown() {
+			slog.Debug("skipping command during shutdown", slog.String("command", command))
+
+			return nil
+		}
+
 		_, err := p.conn.ExecContext(ctx, command)
 		if err != nil {
 			return fmt.Errorf("failed to execute command '%s': %w", command, err)
 		}
 	}
 
-	slog.Debug("Ran commands", slog.Any("commands", strings.Join(commands, ", ")))
+	slog.Debug("ran commands", slog.Any("commands", strings.Join(commands, ", ")))
 
 	return nil
 }
