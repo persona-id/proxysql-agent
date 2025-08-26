@@ -1,19 +1,16 @@
-project_name: proxysql-agent
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
-before:
-  hooks:
-    - go mod tidy
-    - go generate ./...
+version: 2
 
 archives:
   - builds_info:
       group: root
       owner: root
     files:
-      - src: configs/config.yaml
+      - src: config.yaml
         strip_parent: true
-    format: tar.gz
-    # this name template makes the OS and Arch compatible with the results of uname.
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -23,14 +20,10 @@ archives:
       {{- if .Arm }}v{{ .Arm }}{{ end }}
     wrap_in_directory: true
 
-dockers:
-  - dockerfile: build/Dockerfile
-    extra_files:
-      - configs/config.yaml
-    image_templates:
-      - "ghcr.io/persona-id/{{.ProjectName}}:latest"
-      - "ghcr.io/persona-id/{{.ProjectName}}:{{ .Tag }}"
-    skip_push: false
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
 
 builds:
   - main: ./cmd/proxysql-agent/main.go
@@ -43,15 +36,37 @@ builds:
       - amd64
 
 changelog:
-  sort: asc
   filters:
     exclude:
-      - '^docs:'
+      - "^docs:"
+      - "^test:"
+  format: "{{.SHA}}: {{.Message}} (@{{.AuthorUsername}})"
+  sort: asc
+  use: github
 
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
 
-snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+dockers:
+  - dockerfile: build/Dockerfile
+    extra_files:
+      - config.yaml
+    image_templates:
+      - "ghcr.io/persona-id/{{.ProjectName}}:latest"
+      - "ghcr.io/persona-id/{{.ProjectName}}:{{ .Tag }}"
+    skip_push: false
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+release:
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
 
 report_sizes: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

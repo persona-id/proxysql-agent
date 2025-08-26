@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 
+# This file is used by the devcontainer to build the Docker image, and is NOT used by GoReleaser
+
 # Stage 1
 FROM golang:1.25.0-alpine AS builder
 
@@ -32,7 +34,7 @@ RUN apk add --no-cache bash=5.2.15-r5
 WORKDIR /app
 
 COPY --chown=agent:agent --from=builder --chmod=700 /build/proxysql-agent /app/
-COPY --chown=agent:agent --from=builder --chmod=600 /build/configs/example_config.yaml /app/config.yaml
+COPY --chown=agent:agent --from=builder --chmod=600 /build/config.yaml /app/config.yaml
 
 USER agent
 
