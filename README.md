@@ -2,13 +2,11 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/persona-id/proxysql-agent)](https://goreportcard.com/report/github.com/persona-id/proxysql-agent)
 
-
 ## About
 
 The ProxySQL agent is a small, statically compiled go binary for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster, for use as a kubernetes sidecar container. The repo includes a [Dockerfile](build/Dockerfile) to generate an alpine based image, or you can use the version in the [GitHub Container Registry]().
 
 There exists relatively little tooling around ProxySQL, so we hope that this is useful to others out there, even if it's just to learn how to maintain a cluster.
-
 
 ### "Self healing" the ProxySQL cluster
 
@@ -20,7 +18,6 @@ Some examples of where this is necessary:
 - As core pods recycle (or all core pods are recycled) and IPs to them change, the satellites need to run some commands to load the new core pods into runtime
 - If _all_ core pods recycle, the satellite pods will run `LOAD PROXYSQL SERVERS FROM CONFIG` which points them to the `proxysql-core` service, and once the core pods are up the satellites should receive configuration again
   - Note that if your cluster is running fine and the core pods all go away, the satellites will continue to function with the settings they already had; in other words, even if the core pods vanish, you will still serve proxied MySQL traffic as long as the satellites have fetched the configuration once
-
 
 ### Why did you pick golang, if you work at a Ruby shop?
 
@@ -36,42 +33,37 @@ We wanted to avoid having to install a bunch of ruby gems in the container, so w
 
 Because k8s tooling is generally written in Golang, the ruby k8s gems didn't seem to be as maintained or as easy to use as the golang libraries. And because the go process is statically compiled, and we won't need to deal with a bunch of external dependencies at runtime.
 
-
 ## Design
 
 In the [example repo](https://github.com/kuzmik/local-proxysql), there are two separate deployments; the `core` and the `satellite` deployments. The agent is responsible for maintaining the state of this cluster.
 
-![image](docs/infra.png)
+![image](assets/infra.png)
 
 On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:6032` (default address). It will maintain the connection throughout the life of the pod, and will periodicially run the commands necessary to maintain the cluster, depending on the run mode specified on boot.
 
 Additionally, the agent also exposes a simple HTTP API used for k8s health checks for the pod, as well as the /shutdown endpoint, which can be used in a `container.lifecycle.preStop.httpGet` hook to gracefully drain traffic from a pod before stopping it.
 
-
 ## TODOs
 
 There are some internal linear tickets, but here's a high level overview of what we have in mind.
 
-- *P2* - Better test coverage
 - *P3* - HTTP API for controlling the agent. Much to do here, many ideas
   - get proxysql admin status
   - force a satellite resync (if running in satellite mode)
   - etc
-  - Now I'm no sure this is that important; we can just add more commands to the agent, and run said commands from the CLI
 
 ### Done
 
 - *P1* - ~~Dump the contents of `stats_mysql_query_digests` to a file on disk; will be used to get the data into snowflake. File format is CSV~~
 - *P1* - ~~Health checks; replace the ruby health probe with this~~
 - *P2* - ~~Replace the pre-stop ruby script with this~~
-
+- *P2* - ~~Better test coverage~~
 
 ### MVP Requirements
 
 1. ✅ Cluster management (ie: core and satellite agents)
 1. ✅ Health checks via an HTTP endpoint, specifically for the ProxySQL container
 1. ✅ Pre-stop hook replacement
-
 
 ## Releasing a new version
 

@@ -12,7 +12,8 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --chown=agent:agent --chmod=700 config.yaml proxysql-agent /app/config.yaml
+COPY --chown=agent:agent --chmod=755 proxysql-agent /app/proxysql-agent
+COPY --chown=agent:agent --chmod=644 config.yaml /app/config.yaml
 
 WORKDIR /app
 
