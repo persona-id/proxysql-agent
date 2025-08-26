@@ -40,6 +40,8 @@ import (
 //   - When a satellite pod leaves the cluster, nothing needs to be done.
 //   - When a core pod leaves the cluster, the remaining core pods all delete that pod from the proxysql_servers
 //     table and run all of the LOAD X TO RUNTIME commands.
+//
+// FIXME(kuzmik): core pods actually don't need to gracefully shutddown, so we can remove some of this code here.
 func (p *ProxySQL) Core(ctx context.Context) error {
 	if p.clientset == nil {
 		config, err := rest.InClusterConfig()

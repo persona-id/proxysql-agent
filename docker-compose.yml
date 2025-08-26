@@ -1,7 +1,7 @@
 services:
   app:
     build:
-      dockerfile: ../build/dev.Dockerfile
+      dockerfile: build/dev.Dockerfile
     cap_add:
       - SYS_PTRACE
     depends_on:

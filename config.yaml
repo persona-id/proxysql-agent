@@ -16,6 +16,10 @@ log:
   level: "INFO"
   # Log format; valid values are 'text' and 'JSON', defaults to JSON
   format: "JSON"
+  # Include source location in logs; defaults to false
+  source: false
+  # Include probe logs; defaults to false
+  probes: false
 
 # ProxySQL admin connection configuration
 proxysql:
