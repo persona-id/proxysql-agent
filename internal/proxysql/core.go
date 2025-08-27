@@ -24,7 +24,7 @@ import (
 // Core mode specific functions
 //
 
-// ProxySQL core functions.
+// Core() is the main function for core mode.
 //
 // The core pods need to run certain commands when specific pods joins or leaves the
 // cluster, so this function sets up an informer that watches the k8s pods and runs
@@ -179,10 +179,7 @@ func (p *ProxySQL) podAdded(object any) {
 	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
 	if err != nil {
 		// Log the error but continue execution since this is a callback function
-		slog.Error("error in podAdded()",
-			slog.String("command", cmd),
-			slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)),
-		)
+		slog.Error("error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
 
 		return
 	}

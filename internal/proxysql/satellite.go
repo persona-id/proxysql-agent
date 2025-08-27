@@ -16,7 +16,7 @@ import (
 // Satellite mode specific functions
 //
 
-// satelliteLoop is the main loop for satellite mode.
+// Satellite() is the main function for satellite mode.
 func (p *ProxySQL) Satellite(ctx context.Context) error {
 	interval := p.settings.Satellite.Interval
 
@@ -105,6 +105,8 @@ func (p *ProxySQL) PreStopShutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
+// SatelliteResync() is used to resync the satellite pod to the cluster.
+//
 // It's possible we can just use the informer here as well, but maybe it's better to just have cores do that part.
 func (p *ProxySQL) SatelliteResync(ctx context.Context) error {
 	if p.IsShuttingDown() {
@@ -224,7 +226,7 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 		return "", fmt.Errorf("failed to write header to digest file: %w", writeErr)
 	}
 
-	rows, queryErr := p.conn.QueryContext(ctx, "SELECT * FROM stats_mysql_query_digest")
+	rows, queryErr := p.conn.QueryContext(ctx, "SELECT * FROM stats_mysql_query_digest") //nolint:unqueryvet
 	if queryErr != nil && !errors.Is(rows.Err(), sql.ErrNoRows) {
 		return "", fmt.Errorf("failed to query digest data: %w", queryErr)
 	}

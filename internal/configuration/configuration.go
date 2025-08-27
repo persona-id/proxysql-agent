@@ -62,11 +62,13 @@ type Config struct {
 	} `mapstructure:"shutdown"`
 }
 
-// Parse the various configuration methods. Levels of precedence, from least to most:
+// Configure() parses the various configuration methods. Levels of precedence, from least to most:
 //  1. defaults set in this function
 //  2. config file
 //  3. ENV variables
 //  4. commandline flags
+//
+// Returns a pointer to a Config struct and an error if the configuration is invalid.
 func Configure() (*Config, error) {
 	// set up some ENV settings
 	// the replacer lets us access nested configs, like PROXYSQL_ADDRESS will equate to proxysql.address
