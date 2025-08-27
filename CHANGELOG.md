@@ -2,6 +2,13 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+-----
+
+## 1.1.8 - 08/27/2025
+
+- Handle SIGHUP signals to resync the cluster, rather than SIGUSR2. Save SIGUSR2 for something else, to come later
+- More context in the errors, especially for DB commands
+
 ## 1.1.7 - 08/26/2025
 
 - Add catching SIGUSR1 and SIGUSR2; the former prints some stats to the log, the latter is NYI

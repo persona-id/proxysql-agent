@@ -20,6 +20,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+//
+// Core mode specific functions
+//
+
 // ProxySQL core functions.
 //
 // The core pods need to run certain commands when specific pods joins or leaves the
@@ -76,15 +80,15 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 
 			var shutdownErr error
 
-			p.shutdownOnce.Do(func() { //nolint:contextcheck
-				err := p.startDraining()
+			p.shutdownOnce.Do(func() {
+				err := p.startDraining(ctx)
 				if err != nil {
 					slog.Error("Failed to start draining", slog.Any("error", err))
 					shutdownErr = err
 				}
 
 				// Perform graceful shutdown
-				err = p.gracefulShutdown(context.Background())
+				err = p.gracefulShutdown(ctx)
 				if err != nil {
 					slog.Error("Core graceful shutdown failed", slog.Any("error", err))
 
@@ -175,7 +179,10 @@ func (p *ProxySQL) podAdded(object any) {
 	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
 	if err != nil {
 		// Log the error but continue execution since this is a callback function
-		slog.Error("error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+		slog.Error("error in podAdded()",
+			slog.String("command", cmd),
+			slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)),
+		)
 
 		return
 	}
@@ -187,7 +194,7 @@ func (p *ProxySQL) podAdded(object any) {
 	err = p.addPodToCluster(ctx, pod)
 	if err != nil {
 		// Log the error but continue execution since this is a callback function
-		slog.Error("error in podAdded()", slog.Any("err", err))
+		slog.Error("error in addPodToCluster()", slog.Any("err", err))
 	}
 }
 

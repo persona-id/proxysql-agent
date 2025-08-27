@@ -1,6 +1,7 @@
 package restapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,17 +212,17 @@ func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) h
 // is up and listening. This also has the _intended_ side effect of ensuring that
 // the mysql connection to the admin port is open.
 func startupHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		err := psql.Ping(r.Context())
+		err := psql.Ping(context.Background()) //nolint:contextcheck
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 
 			// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 			fmt.Fprintf(w, `{"message": %s, "status": "unhealthy"}`, err)
 
-			slog.Error("Error in pingHandler()", slog.Any("err", err))
+			slog.Error("Error in startupHandler()", slog.Any("err", err))
 		} else {
 			w.WriteHeader(http.StatusOK)
 
@@ -234,7 +235,11 @@ func startupHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.Handl
 // preStopHandler is an HTTP request handler function that handles the prestop shutdown endpoint.
 func preStopHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		err := psql.PreStopShutdown()
+		// we don't want to block the pod from shutting down if the shutdown fails
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
+		defer cancel()
+
+		err := psql.PreStopShutdown(ctx) //nolint:contextcheck
 		if err != nil {
 			// Log error but still return success since this is a prestop hook
 			slog.Error("prestop shutdown failed", slog.Any("error", err))

@@ -32,15 +32,15 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 
 			var shutdownErr error
 
-			p.shutdownOnce.Do(func() { //nolint:contextcheck
-				err := p.startDraining()
+			p.shutdownOnce.Do(func() {
+				err := p.startDraining(ctx)
 				if err != nil {
 					shutdownErr = fmt.Errorf("failed to start draining: %w", err)
 
 					return
 				}
 
-				err = p.gracefulShutdown(context.Background())
+				err = p.gracefulShutdown(ctx)
 				if err != nil {
 					shutdownErr = fmt.Errorf("graceful shutdown failed: %w", err)
 				}
@@ -58,7 +58,14 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 }
 
 // GetMissingCorePods returns the number of core pods that are missing from the cluster.
+//
+// FIXME(kuzmik): change this to use an informer that watches for new core pods, sleeps for 10s, and then triggers a resync.
 func (p *ProxySQL) GetMissingCorePods(ctx context.Context) (int, error) {
+	// If connection is closed or we're shutting down, return nil
+	if p.conn == nil || p.IsShuttingDown() {
+		return -1, nil
+	}
+
 	count := -1
 
 	query := `SELECT COUNT(hostname)
@@ -77,11 +84,11 @@ func (p *ProxySQL) GetMissingCorePods(ctx context.Context) (int, error) {
 }
 
 // PreStopShutdown performs the complete graceful shutdown logic for HTTP handler.
-func (p *ProxySQL) PreStopShutdown() error {
+func (p *ProxySQL) PreStopShutdown(ctx context.Context) error {
 	var shutdownErr error
 
 	p.shutdownOnce.Do(func() {
-		err := p.startDraining()
+		err := p.startDraining(ctx)
 		if err != nil {
 			shutdownErr = fmt.Errorf("failed to start draining: %w", err)
 
@@ -89,9 +96,7 @@ func (p *ProxySQL) PreStopShutdown() error {
 		}
 
 		// Use a new context for graceful shutdown that's independent of the HTTP request
-		shutdownCtx := context.Background()
-
-		err = p.gracefulShutdown(shutdownCtx)
+		err = p.gracefulShutdown(ctx)
 		if err != nil {
 			shutdownErr = fmt.Errorf("graceful shutdown failed: %w", err)
 		}
@@ -276,17 +281,9 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	return dumpFile, nil
 }
 
-// gracefulShutdown performs the graceful shutdown logic for satellite mode.
-func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
-	slog.Info("starting graceful shutdown process")
-
-	drainTime := time.Duration(p.settings.Shutdown.DrainTimeout) * time.Second
-	shutdownTimeout := time.Duration(p.settings.Shutdown.ShutdownTimeout) * time.Second
-
-	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
-	defer cancel()
-
-	// Step 1: Monitor connection draining
+// waitForConnectionDrain monitors client connections and waits for them to drain.
+// Returns when connections are drained, timeout is reached, or context is cancelled.
+func (p *ProxySQL) waitForConnectionDrain(ctx context.Context, drainTime time.Duration) {
 	slog.Info("monitoring connection drain", slog.Duration("max_wait", drainTime))
 
 	drainStart := time.Now()
@@ -296,18 +293,19 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 
 	for {
 		select {
-		case <-shutdownCtx.Done():
+		case <-ctx.Done():
 			slog.Warn("shutdown timeout reached during connection drain")
 
-			goto shutdown_proxysql
+			return
+
 		case <-ticker.C:
 			if time.Since(drainStart) >= drainTime {
 				slog.Info("drain timeout reached, proceeding with shutdown")
 
-				goto shutdown_proxysql
+				return
 			}
 
-			clients, err := p.ProbeClients(shutdownCtx)
+			clients, err := p.ProbeClients(ctx)
 			if err != nil {
 				slog.Debug("failed to check client connections during drain", slog.Any("error", err))
 
@@ -319,22 +317,42 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 			if clients == 0 {
 				slog.Info("all client connections drained", slog.Duration("drain_time", time.Since(drainStart)))
 
-				goto shutdown_proxysql
+				return
 			}
 		}
 	}
+}
 
-shutdown_proxysql:
-	// Step 2: Enter stopping phase
+// gracefulShutdown performs the graceful shutdown logic for satellite mode.
+func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
+	slog.Info("starting graceful shutdown process")
+
+	drainTime := time.Duration(p.settings.Shutdown.DrainTimeout) * time.Second
+	shutdownTimeout := time.Duration(p.settings.Shutdown.ShutdownTimeout) * time.Second
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+	defer cancel()
+
+	// Step 1: start draining (already done in PreStopShutdown)
+
+	// Step 2: Monitor connection draining
+	p.waitForConnectionDrain(shutdownCtx, drainTime)
+
+	// Step 3: Enter stopping phase
 	p.setShutdownPhase(PhaseStopping)
 
-	// Step 3: Stop ProxySQL after connections have drained
+	// Step 4: Stop ProxySQL after connections have drained
 	if p.conn != nil {
 		slog.Info("shutting down ProxySQL")
 
 		_, err := p.conn.ExecContext(shutdownCtx, "PROXYSQL SHUTDOWN SLOW")
 		if err != nil {
-			slog.Error("failed to shutdown ProxySQL", slog.Any("error", err))
+			slog.Error("failed to shutdown ProxySQL",
+				slog.String("command", "PROXYSQL SHUTDOWN SLOW"),
+				slog.Any("conn", p.conn.Stats().OpenConnections),
+				slog.Any("error", err),
+			)
+
 			// Continue with cleanup even if ProxySQL shutdown fails
 		} else {
 			slog.Info("ProxySQL shutdown command completed")

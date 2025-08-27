@@ -31,12 +31,16 @@ func (p ShutdownPhase) String() string {
 	switch p {
 	case PhaseRunning:
 		return "running"
+
 	case PhaseDraining:
 		return "draining"
+
 	case PhaseStopping:
 		return "stopping"
+
 	case PhaseStopped:
 		return "stopped"
+
 	default:
 		return "unknown"
 	}
@@ -84,6 +88,11 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 }
 
 func (p *ProxySQL) Ping(ctx context.Context) error {
+	// If connection is closed or we're shutting down, return nil
+	if p.conn == nil || p.IsShuttingDown() {
+		return nil
+	}
+
 	err := p.conn.PingContext(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to ping ProxySQL: %w", err)
@@ -173,7 +182,7 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 
 	err := p.conn.QueryRowContext(ctx, query).Scan(&online)
 	if err != nil {
-		return -1, fmt.Errorf("failed to query connection pool stats: %w", err)
+		return -1, fmt.Errorf("failed to query connection pool stats: command: %s, error: %w", query, err)
 	}
 
 	if online.Valid {
@@ -232,7 +241,7 @@ func (p *ProxySQL) probeDraining() bool {
 }
 
 // startDraining creates the drain file to signal that the pod is draining.
-func (p *ProxySQL) startDraining() error {
+func (p *ProxySQL) startDraining(ctx context.Context) error {
 	p.setShutdownPhase(PhaseDraining)
 
 	drainFile := p.settings.Shutdown.DrainingFile
@@ -244,12 +253,15 @@ func (p *ProxySQL) startDraining() error {
 
 	slog.Info("created drain file", slog.String("path", drainFile))
 
-	shutdownCtx := context.Background()
+	cmd := "PROXYSQL PAUSE"
 
-	_, execErr := p.conn.ExecContext(shutdownCtx, "PROXYSQL PAUSE")
+	_, execErr := p.conn.ExecContext(ctx, cmd)
 	if execErr != nil {
 		// Continue with shutdown even if pause fails
-		slog.Error("failed to pause ProxySQL", slog.Any("error", execErr))
+		slog.Error("failed to pause ProxySQL",
+			slog.String("command", cmd),
+			slog.Any("error", execErr),
+		)
 	} else {
 		slog.Info("ProxySQL paused")
 	}
@@ -265,19 +277,28 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 
 	var total, online, shunned int
 
-	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	// all backends
+	cmd1 := "SELECT COUNT(*) FROM runtime_mysql_servers"
+
+	err := p.conn.QueryRowContext(ctx, cmd1).Scan(&total)
 	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query total backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query total backends: command: %s, error: %w", cmd1, err)
 	}
 
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	// online backends
+	cmd2 := "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'"
+
+	err = p.conn.QueryRowContext(ctx, cmd2).Scan(&online)
 	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query online backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query online backends: command: %s, error: %w", cmd2, err)
 	}
 
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'SHUNNED'").Scan(&shunned)
+	// shunned backends
+	cmd3 := "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'SHUNNED'"
+
+	err = p.conn.QueryRowContext(ctx, cmd3).Scan(&shunned)
 	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query shunned backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query shunned backends: command: %s, error: %w", cmd3, err)
 	}
 
 	return total, online, shunned, nil
