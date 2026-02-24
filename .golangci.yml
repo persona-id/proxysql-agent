@@ -3,10 +3,14 @@ linters:
   default: all
   disable:
     - exhaustruct
+    - godoclint
     - lll
+    - noinlineerr
     - testpackage
+    - unqueryvet
     - varnamelen
     - wsl
+    - wsl_v5
     - godox # FIXME
 
   settings:
@@ -79,6 +83,14 @@ linters:
       - path: internal/configuration/configuration_test\.go
         linters:
           - paralleltest
+      # G101: Test data with env var names is not hardcoded credentials
+      # G117: Password field name in config structs is not a hardcoded secret
+      # G703: File paths come from config/hostname, not user input
+      # G705: Internal API only accessible inside the pod
+      # G706: Logging probe results is safe
+      - linters:
+          - gosec
+        text: "G101|G117|G703|G705|G706"
 
 issues:
   max-issues-per-linter: 0

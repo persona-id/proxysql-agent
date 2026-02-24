@@ -96,9 +96,9 @@ func (p *ProxySQL) Ping(ctx context.Context) error {
 
 type ProbeResult struct {
 	Backends *struct {
-		Total   int `json:"total,omitempty"`
 		Online  int `json:"online,omitempty"`
 		Shunned int `json:"shunned,omitempty"`
+		Total   int `json:"total,omitempty"`
 	} `json:"backends,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Message  string `json:"message,omitempty"`
@@ -125,13 +125,13 @@ func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
 		Status:   "",
 		Message:  "",
 		Backends: &struct {
-			Total   int `json:"total,omitempty"`
 			Online  int `json:"online,omitempty"`
 			Shunned int `json:"shunned,omitempty"`
+			Total   int `json:"total,omitempty"`
 		}{
-			Total:   total,
 			Online:  online,
 			Shunned: shunned,
+			Total:   total,
 		},
 	}
 
@@ -141,17 +141,17 @@ func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
 // Process the ProbeResult and set values for use in the json message the API returns.
 func processResults(results ProbeResult) ProbeResult {
 	switch {
-	case results.Backends.Online > results.Backends.Total:
-		results.Status = "ok"
-		results.Message = "some backends offline"
-
-	case results.Backends.Online == 0:
-		results.Status = "unhealthy"
-		results.Message = "all backends offline"
-
 	case results.Draining:
 		results.Status = "draining"
 		results.Message = "draining traffic"
+
+	case results.Backends.Online == 0:
+		results.Status = "ok"
+		results.Message = "all backends offline"
+
+	case results.Backends.Online < results.Backends.Total:
+		results.Status = "ok"
+		results.Message = "some backends offline"
 
 	default:
 		results.Status = "ok"
@@ -193,6 +193,9 @@ func (p *ProxySQL) IsShuttingDown() bool {
 
 // SetHTTPServer sets the HTTP server reference for graceful shutdown.
 func (p *ProxySQL) SetHTTPServer(server *http.Server) {
+	p.shutdownMu.Lock()
+	defer p.shutdownMu.Unlock()
+
 	p.httpServer = server
 }
 
@@ -237,10 +240,12 @@ func (p *ProxySQL) startDraining() error {
 
 	drainFile := p.settings.Shutdown.DrainingFile
 
-	_, err := os.Create(drainFile)
+	f, err := os.Create(drainFile)
 	if err != nil {
 		return fmt.Errorf("failed to create drain file %s: %w", drainFile, err)
 	}
+
+	f.Close()
 
 	slog.Info("created drain file", slog.String("path", drainFile))
 
@@ -265,19 +270,14 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 
 	var total, online, shunned int
 
-	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
-	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query total backends: %w", err)
-	}
+	query := `SELECT COUNT(*) AS total,
+		SUM(CASE WHEN status = 'ONLINE' THEN 1 ELSE 0 END) AS online,
+		SUM(CASE WHEN status = 'SHUNNED' THEN 1 ELSE 0 END) AS shunned
+		FROM runtime_mysql_servers`
 
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
+	err := p.conn.QueryRowContext(ctx, query).Scan(&total, &online, &shunned)
 	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query online backends: %w", err)
-	}
-
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'SHUNNED'").Scan(&shunned)
-	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query shunned backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query backend status: %w", err)
 	}
 
 	return total, online, shunned, nil

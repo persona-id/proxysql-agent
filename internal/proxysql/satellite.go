@@ -354,13 +354,17 @@ shutdown_proxysql:
 	}
 
 	// Step 5: Stop HTTP server
-	if p.httpServer != nil {
+	p.shutdownMu.RLock()
+	httpServer := p.httpServer
+	p.shutdownMu.RUnlock()
+
+	if httpServer != nil {
 		slog.Info("shutting down HTTP server")
 
 		serverShutdownCtx, serverCancel := context.WithTimeout(shutdownCtx, 10*time.Second) //nolint:mnd
 		defer serverCancel()
 
-		err := p.httpServer.Shutdown(serverShutdownCtx)
+		err := httpServer.Shutdown(serverShutdownCtx)
 		if err != nil {
 			slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
 		} else {

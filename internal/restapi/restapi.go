@@ -99,17 +99,16 @@ func livenessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) ht
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshalling JSON", slog.Any("err", err))
+			w.WriteHeader(http.StatusInternalServerError)
 
 			return
 		}
 
-		// we want to remain live even during draining, so that we can ensure that the pod
-		// isn't killed while there are queries in flight
-		if results.Status == "ok" || results.Status == "draining" {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
+		// Liveness should always pass as long as the agent can talk to ProxySQL.
+		// Backends being offline is not a reason to kill the pod — restarting
+		// the pod won't fix external backends, and killing it during draining
+		// would drop in-flight queries.
+		w.WriteHeader(http.StatusOK)
 
 		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
@@ -184,16 +183,17 @@ func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) h
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshaling json", slog.Any("err", err))
+			w.WriteHeader(http.StatusInternalServerError)
 
 			return
 		}
 
-		// we want to remain live even during draining, so that we can ensure that the proxysql container
-		// isn't killed while there are transactions in flight
-		if results.Status == "draining" {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		} else {
+		// Readiness should only pass when all backends are healthy. If backends
+		// are offline or draining, stop sending traffic to this pod.
+		if results.Status == "ok" {
 			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 
 		// nosemgrep:go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter

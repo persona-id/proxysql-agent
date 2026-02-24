@@ -216,7 +216,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	}
 
 	// Pod is new and transitioned to running, so we add that to the proxysql_servers table.
-	if oldpod.Status.Phase == "Pending" && newpod.Status.Phase == "Running" {
+	if oldpod.Status.Phase == v1.PodPending && newpod.Status.Phase == v1.PodRunning {
 		err := p.addPodToCluster(ctx, newpod)
 		if err != nil {
 			// Log the error but continue execution since this is a callback function
@@ -226,7 +226,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 
 	// Pod is shutting down. Only run this for core pods, as satellites don't need special considerations when
 	// they leave the cluster.
-	if oldpod.Status.Phase == "Running" && newpod.Status.Phase == "Failed" {
+	if oldpod.Status.Phase == v1.PodRunning && newpod.Status.Phase == v1.PodFailed {
 		err := p.removePodFromCluster(ctx, oldpod)
 		if err != nil {
 			// Log the error but continue execution since this is a callback function
