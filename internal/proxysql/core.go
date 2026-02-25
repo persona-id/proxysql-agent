@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -146,11 +145,13 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 	return nil
 }
 
-// This function is needed to do bootstrapping. At first I was using podUpdated to do adds, but we would never
-// get the first pod to come up. This function will only be useful on the first core pod to come up, the rest will
-// be handled via podUpdated.
+// This function handles bootstrapping when core pods start. It fires for all pods visible during
+// the initial informer cache sync. By handling all Running pods (not just own hostname), it covers
+// the case where multiple core pods start simultaneously — each pod adds all peers it sees, so the
+// cluster forms even when no Pending→Running transitions are observed by podUpdated.
 //
-// This feels a bit clumsy.
+// Retries the proxysql_servers query to handle the window where ProxySQL's cluster tables aren't
+// ready immediately after startup.
 func (p *ProxySQL) podAdded(object any) {
 	ctx := context.Background() // Use background context for event handlers
 
@@ -159,20 +160,35 @@ func (p *ProxySQL) podAdded(object any) {
 		return
 	}
 
-	// if the new pod is not THIS pod, bail out of this function. the rest of this function should only apply
-	// to the first core pod to come up in the cluster.
-	hostname, osErr := os.Hostname()
-	if osErr != nil || pod.Name != hostname {
+	// Only handle Running pods; Pending→Running transitions are caught by podUpdated.
+	if pod.Status.Phase != v1.PodRunning {
 		return
 	}
 
-	// check if pod is already in the proxysql_servers table; this can happen when core pods add
-	// other core pods.
+	// Check if pod is already in the proxysql_servers table. Retry to handle the startup window
+	// where ProxySQL's cluster tables aren't initialized yet.
 	var count int
+
+	const (
+		maxRetries = 3
+		retryDelay = 200 * time.Millisecond
+	)
 
 	cmd := "SELECT count(*) FROM proxysql_servers WHERE hostname = ?"
 
-	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
+	var err error
+
+	for i := range maxRetries {
+		err = p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
+		if err == nil {
+			break
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(retryDelay)
+		}
+	}
+
 	if err != nil {
 		// Log the error but continue execution since this is a callback function
 		slog.Error("error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))

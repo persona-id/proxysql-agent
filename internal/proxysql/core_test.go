@@ -145,11 +145,36 @@ func TestPodAdded(t *testing.T) {
 	testCases := []struct {
 		name      string
 		setupMock func(mock sqlmock.Sqlmock)
-		podExists bool
+		pod       *v1.Pod
 	}{
 		{
-			name:      "core pod already exists in cluster",
-			podExists: true,
+			name: "pending pod is not added to cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodPending,
+				},
+			},
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+		{
+			name: "core pod already exists in cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(
 					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
@@ -159,9 +184,87 @@ func TestPodAdded(t *testing.T) {
 			},
 		},
 		{
-			name:      "core pod does not exist in cluster",
-			podExists: false,
+			name: "core pod does not exist in cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
 			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+
+				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+
+				mock.ExpectExec(
+					regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO proxysql_servers VALUES ("pod-ip", 6032, 0, %q)`, hostname)),
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "running pod with a different name is added to cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-core-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "other-pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("other-pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+
+				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+
+				mock.ExpectExec(
+					regexp.QuoteMeta(`INSERT INTO proxysql_servers VALUES ("other-pod-ip", 6032, 0, "other-core-pod")`),
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "retries count query when proxysql not ready",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("pod-ip").WillReturnError(errSQLTest)
+
 				mock.ExpectQuery(
 					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
 				).WithArgs("pod-ip").WillReturnRows(
@@ -204,22 +307,9 @@ func TestPodAdded(t *testing.T) {
 				httpServer:    nil,
 			}
 
-			pod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels: map[string]string{
-						"component": "core",
-					},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-				},
-			}
-
 			tc.setupMock(mock)
 
-			p.podAdded(pod)
+			p.podAdded(tc.pod)
 
 			err = mock.ExpectationsWereMet()
 			if err != nil {
