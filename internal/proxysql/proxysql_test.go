@@ -179,6 +179,19 @@ func TestProbeBackends(t *testing.T) {
 			expectedShunned: 0,
 			expectedErr:     false,
 		},
+		{
+			name: "empty table returns zeros not scan error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"total", "online", "shunned"}).
+					AddRow(0, nil, nil)
+				mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			},
+			shutdownPhase:   PhaseRunning,
+			expectedTotal:   0,
+			expectedOnline:  0,
+			expectedShunned: 0,
+			expectedErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -215,6 +228,90 @@ func TestProbeBackends(t *testing.T) {
 
 			if shunned != tt.expectedShunned {
 				t.Errorf("probeBackends() shunned = %d, want %d", shunned, tt.expectedShunned)
+			}
+
+			mockErr := mock.ExpectationsWereMet()
+			if mockErr != nil {
+				t.Errorf("SQL expectations not met: %v", mockErr)
+			}
+		})
+	}
+}
+
+func TestProbeClients(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		setupMock     func(mock sqlmock.Sqlmock)
+		shutdownPhase ShutdownPhase
+		expectedCount int
+		expectedErr   bool
+	}{
+		{
+			name: "returns connected client count",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(5)
+				mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			},
+			shutdownPhase: PhaseRunning,
+			expectedCount: 5,
+			expectedErr:   false,
+		},
+		{
+			name: "null result returns zero not minus one",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(nil)
+				mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			},
+			shutdownPhase: PhaseRunning,
+			expectedCount: 0,
+			expectedErr:   false,
+		},
+		{
+			name:          "shutting down returns zero",
+			setupMock:     func(_ sqlmock.Sqlmock) {},
+			shutdownPhase: PhaseDraining,
+			expectedCount: 0,
+			expectedErr:   false,
+		},
+		{
+			name: "query error returns error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT").WillReturnError(ErrDatabase)
+			},
+			shutdownPhase: PhaseRunning,
+			expectedCount: -1,
+			expectedErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Error creating mock database: %v", err)
+			}
+			defer db.Close()
+
+			proxy := &ProxySQL{
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownPhase: tt.shutdownPhase,
+			}
+
+			tt.setupMock(mock)
+
+			count, err := proxy.ProbeClients(context.Background())
+
+			if (err != nil) != tt.expectedErr {
+				t.Errorf("ProbeClients() error = %v, wantErr %v", err, tt.expectedErr)
+			}
+
+			if count != tt.expectedCount {
+				t.Errorf("ProbeClients() count = %d, want %d", count, tt.expectedCount)
 			}
 
 			mockErr := mock.ExpectationsWereMet()

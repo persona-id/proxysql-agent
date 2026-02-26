@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 
@@ -50,6 +51,8 @@ type ProxySQL struct {
 	shutdownPhase ShutdownPhase
 	shutdownMu    sync.RWMutex
 	httpServer    *http.Server
+	retryDelay    time.Duration  // delay between podAdded retries; defaults to podAddedRetryDelay
+	podWg         sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -80,6 +83,8 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		shutdownPhase: PhaseRunning,
 		shutdownMu:    sync.RWMutex{},
 		httpServer:    nil,
+		retryDelay:    podAddedRetryDelay,
+		podWg:         sync.WaitGroup{},
 	}, nil
 }
 
@@ -180,7 +185,7 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 		return int(online.Int32), nil
 	}
 
-	return -1, nil
+	return 0, nil
 }
 
 // IsShuttingDown returns true if the ProxySQL instance is in shutdown process.
@@ -249,7 +254,8 @@ func (p *ProxySQL) startDraining() error {
 
 	slog.Info("created drain file", slog.String("path", drainFile))
 
-	shutdownCtx := context.Background()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
+	defer shutdownCancel()
 
 	_, execErr := p.conn.ExecContext(shutdownCtx, "PROXYSQL PAUSE")
 	if execErr != nil {
@@ -268,11 +274,14 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 		return 0, 0, 0, nil
 	}
 
-	var total, online, shunned int
+	var total int
+	var online, shunned sql.NullInt64
 
+	// COALESCE guards against NULL when the table is empty, but we also scan into
+	// NullInt64 as a defensive measure in case the database returns NULL anyway.
 	query := `SELECT COUNT(*) AS total,
-		SUM(CASE WHEN status = 'ONLINE' THEN 1 ELSE 0 END) AS online,
-		SUM(CASE WHEN status = 'SHUNNED' THEN 1 ELSE 0 END) AS shunned
+		COALESCE(SUM(CASE WHEN status = 'ONLINE' THEN 1 ELSE 0 END), 0) AS online,
+		COALESCE(SUM(CASE WHEN status = 'SHUNNED' THEN 1 ELSE 0 END), 0) AS shunned
 		FROM runtime_mysql_servers`
 
 	err := p.conn.QueryRowContext(ctx, query).Scan(&total, &online, &shunned)
@@ -280,5 +289,5 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 		return -1, -1, -1, fmt.Errorf("failed to query backend status: %w", err)
 	}
 
-	return total, online, shunned, nil
+	return total, int(online.Int64), int(shunned.Int64), nil
 }

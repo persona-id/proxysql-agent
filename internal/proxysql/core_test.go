@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
@@ -60,6 +61,20 @@ func TestPodUpdated(t *testing.T) {
 			name:        "pod stopped",
 			oldPodPhase: "Running",
 			newPodPhase: "Failed",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(
+					`DELETE FROM proxysql_servers WHERE hostname = "old-pod-ip"`,
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name:        "pod succeeded",
+			oldPodPhase: "Running",
+			newPodPhase: "Succeeded",
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectExec(
 					`DELETE FROM proxysql_servers WHERE hostname = "old-pod-ip"`,
@@ -137,21 +152,19 @@ func TestPodUpdated(t *testing.T) {
 func TestPodAdded(t *testing.T) {
 	t.Parallel()
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatalf("Failed to get hostname: %v", err)
-	}
-
+	// podAdded is now async — it spawns a goroutine. Only early returns
+	// (before the goroutine is spawned) are tested here. Logic tests are in
+	// TestAddPodWhenReady.
 	testCases := []struct {
 		name      string
 		setupMock func(mock sqlmock.Sqlmock)
 		pod       *v1.Pod
 	}{
 		{
-			name: "pending pod is not added to cluster",
+			name: "pending pod does not spawn goroutine",
 			pod: &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
+					Name:      "test-pod",
 					Namespace: "test-ns",
 					Labels:    map[string]string{"component": "core"},
 				},
@@ -161,127 +174,6 @@ func TestPodAdded(t *testing.T) {
 				},
 			},
 			setupMock: func(_ sqlmock.Sqlmock) {},
-		},
-		{
-			name: "core pod already exists in cluster",
-			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-					Phase: v1.PodRunning,
-				},
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
-					sqlmock.NewRows([]string{"count"}).AddRow(1),
-				)
-			},
-		},
-		{
-			name: "core pod does not exist in cluster",
-			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-					Phase: v1.PodRunning,
-				},
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
-					sqlmock.NewRows([]string{"count"}).AddRow(0),
-				)
-
-				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
-					WillReturnResult(sqlmock.NewResult(0, 1))
-
-				mock.ExpectExec(
-					regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO proxysql_servers VALUES ("pod-ip", 6032, 0, %q)`, hostname)),
-				).WillReturnResult(
-					sqlmock.NewResult(0, 1),
-				)
-
-				expectRuntimeLoads(mock)
-			},
-		},
-		{
-			name: "running pod with a different name is added to cluster",
-			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "other-core-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
-				Status: v1.PodStatus{
-					PodIP: "other-pod-ip",
-					Phase: v1.PodRunning,
-				},
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("other-pod-ip").WillReturnRows(
-					sqlmock.NewRows([]string{"count"}).AddRow(0),
-				)
-
-				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
-					WillReturnResult(sqlmock.NewResult(0, 1))
-
-				mock.ExpectExec(
-					regexp.QuoteMeta(`INSERT INTO proxysql_servers VALUES ("other-pod-ip", 6032, 0, "other-core-pod")`),
-				).WillReturnResult(
-					sqlmock.NewResult(0, 1),
-				)
-
-				expectRuntimeLoads(mock)
-			},
-		},
-		{
-			name: "retries count query when proxysql not ready",
-			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
-				Status: v1.PodStatus{
-					PodIP: "pod-ip",
-					Phase: v1.PodRunning,
-				},
-			},
-			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnError(errSQLTest)
-
-				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
-					sqlmock.NewRows([]string{"count"}).AddRow(0),
-				)
-
-				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
-					WillReturnResult(sqlmock.NewResult(0, 1))
-
-				mock.ExpectExec(
-					regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO proxysql_servers VALUES ("pod-ip", 6032, 0, %q)`, hostname)),
-				).WillReturnResult(
-					sqlmock.NewResult(0, 1),
-				)
-
-				expectRuntimeLoads(mock)
-			},
 		},
 	}
 
@@ -313,6 +205,216 @@ func TestPodAdded(t *testing.T) {
 
 			err = mock.ExpectationsWereMet()
 			if err != nil {
+				t.Errorf("Unfulfilled expectations: %s", err)
+			}
+		})
+	}
+}
+
+func TestAddPodWhenReady(t *testing.T) {
+	t.Parallel()
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("Failed to get hostname: %v", err)
+	}
+
+	testCases := []struct {
+		name      string
+		setupMock func(mock sqlmock.Sqlmock)
+		pod       *v1.Pod
+		ctxFn     func() (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "pod already exists in cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 5*time.Second)
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(1),
+				)
+			},
+		},
+		{
+			name: "pod does not exist in cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      hostname,
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 5*time.Second)
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+
+				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+
+				mock.ExpectExec(
+					regexp.QuoteMeta(fmt.Sprintf(`INSERT INTO proxysql_servers VALUES ("pod-ip", 6032, 0, %q)`, hostname)),
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "pod with a different name is added to cluster",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-core-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "other-pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 5*time.Second)
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("other-pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+
+				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+
+				mock.ExpectExec(
+					regexp.QuoteMeta(`INSERT INTO proxysql_servers VALUES ("other-pod-ip", 6032, 0, "other-core-pod")`),
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "retries more than 3 times until ProxySQL is ready",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Second)
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				// Fail 5 times — more than the old 3-retry maximum.
+				for range 5 {
+					mock.ExpectQuery(
+						regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+					).WithArgs("pod-ip").WillReturnError(errSQLTest)
+				}
+
+				mock.ExpectQuery(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
+				).WithArgs("pod-ip").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+
+				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+
+				mock.ExpectExec(
+					regexp.QuoteMeta(`INSERT INTO proxysql_servers VALUES ("pod-ip", 6032, 0, "test-pod")`),
+				).WillReturnResult(
+					sqlmock.NewResult(0, 1),
+				)
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "stops retrying when context is cancelled",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{
+					PodIP: "pod-ip",
+					Phase: v1.PodRunning,
+				},
+			},
+			ctxFn: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel() // already cancelled — no queries should execute
+
+				return ctx, cancel
+			},
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Failed to create mock database connection: %v", err)
+			}
+			defer db.Close()
+
+			mock.MatchExpectationsInOrder(true)
+
+			p := &ProxySQL{
+				clientset:     nil,
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownOnce:  sync.Once{},
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+				httpServer:    nil,
+				retryDelay:    0, // no delay in tests
+			}
+
+			ctx, cancel := tc.ctxFn()
+			defer cancel()
+
+			tc.setupMock(mock)
+
+			p.addPodWhenReady(ctx, tc.pod)
+
+			if err = mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})

@@ -120,7 +120,7 @@ func TestSatelliteResync(t *testing.T) {
 	commands := []string{
 		"DELETE FROM proxysql_servers",
 		"LOAD PROXYSQL SERVERS FROM CONFIG",
-		"LOAD PROXYSQL SERVERS TO RUNTIME;",
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
 	}
 	for _, command := range commands {
 		mock.ExpectExec(command).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -134,5 +134,69 @@ func TestSatelliteResync(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	if err != nil {
 		t.Errorf("There were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestDumpQueryDigests(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		setupMock   func(mock sqlmock.Sqlmock)
+		expectedErr bool
+	}{
+		{
+			name: "query error returns error without panic",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT COUNT").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(1),
+				)
+				mock.ExpectQuery("SELECT \\* FROM stats_mysql_query_digest").
+					WillReturnError(errSQLTest)
+			},
+			expectedErr: true,
+		},
+		{
+			name: "no digests returns empty string",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT COUNT").WillReturnRows(
+					sqlmock.NewRows([]string{"count"}).AddRow(0),
+				)
+			},
+			expectedErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Error creating mock database: %v", err)
+			}
+			defer db.Close()
+
+			proxy := &ProxySQL{
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownPhase: PhaseRunning,
+			}
+
+			tt.setupMock(mock)
+
+			tmpdir := t.TempDir()
+
+			_, err = proxy.dumpQueryDigests(context.Background(), tmpdir)
+
+			if (err != nil) != tt.expectedErr {
+				t.Errorf("dumpQueryDigests() error = %v, wantErr %v", err, tt.expectedErr)
+			}
+
+			mockErr := mock.ExpectationsWereMet()
+			if mockErr != nil {
+				t.Errorf("SQL expectations not met: %v", mockErr)
+			}
+		})
 	}
 }
