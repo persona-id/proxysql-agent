@@ -15,6 +15,7 @@ import (
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 )
 
 // Define a static error for tests.
@@ -604,6 +605,99 @@ func TestRemovePodFromCluster(t *testing.T) {
 
 			err = mock.ExpectationsWereMet()
 			if err != nil {
+				t.Errorf("Unfulfilled expectations: %s", err)
+			}
+		})
+	}
+}
+
+func TestPodDeleted(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		setupMock func(mock sqlmock.Sqlmock)
+		object    any
+	}{
+		{
+			name: "core pod deleted removes from cluster",
+			object: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+				},
+				Status: v1.PodStatus{PodIP: "pod-ip"},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(
+					`DELETE FROM proxysql_servers WHERE hostname = "pod-ip"`,
+				).WillReturnResult(sqlmock.NewResult(0, 1))
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "satellite pod deleted only runs runtime loads",
+			object: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "satellite"},
+				},
+				Status: v1.PodStatus{PodIP: "pod-ip"},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name:      "invalid object type is ignored",
+			object:    "not-a-pod",
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+		{
+			name: "tombstone with core pod removes from cluster",
+			object: cache.DeletedFinalStateUnknown{
+				Key: "test-ns/test-pod",
+				Obj: &v1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod",
+						Namespace: "test-ns",
+						Labels:    map[string]string{"component": "core"},
+					},
+					Status: v1.PodStatus{PodIP: "pod-ip"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(
+					`DELETE FROM proxysql_servers WHERE hostname = "pod-ip"`,
+				).WillReturnResult(sqlmock.NewResult(0, 1))
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "tombstone with invalid object type is ignored",
+			object: cache.DeletedFinalStateUnknown{
+				Key: "test-ns/test-pod",
+				Obj: "not-a-pod",
+			},
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, mock, _ := setupPodTest(t, "test-ns", "core")
+
+			tc.setupMock(mock)
+
+			p.podDeleted(tc.object)
+
+			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
 			}
 		})

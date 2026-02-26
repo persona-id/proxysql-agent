@@ -133,7 +133,7 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 	_, err := podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    p.podAdded,
 		UpdateFunc: p.podUpdated,
-		DeleteFunc: nil,
+		DeleteFunc: p.podDeleted,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add event handler to pod informer: %w", err)
@@ -277,6 +277,35 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 			// Log the error but continue execution since this is a callback function
 			slog.Error("error in removePod()", slog.Any("err", err))
 		}
+	}
+}
+
+// podDeleted handles pod deletion events from the informer. It removes the pod from
+// the proxysql_servers table so ProxySQL's cluster monitor stops trying to reach it.
+// The object may be a *v1.Pod or a cache.DeletedFinalStateUnknown tombstone (used when
+// the informer missed the delete event during a resync).
+func (p *ProxySQL) podDeleted(object any) {
+	pod, ok := object.(*v1.Pod)
+	if !ok {
+		tombstone, ok := object.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			slog.Error("error in podDeleted(): unexpected type", slog.String("type", fmt.Sprintf("%T", object)))
+
+			return
+		}
+
+		pod, ok = tombstone.Obj.(*v1.Pod)
+		if !ok {
+			slog.Error("error in podDeleted(): tombstone unexpected type", slog.String("type", fmt.Sprintf("%T", tombstone.Obj)))
+
+			return
+		}
+	}
+
+	ctx := context.Background()
+
+	if err := p.removePodFromCluster(ctx, pod); err != nil {
+		slog.Error("error in removePod()", slog.Any("err", err))
 	}
 }
 
