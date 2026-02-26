@@ -139,6 +139,31 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 		return fmt.Errorf("failed to add event handler to pod informer: %w", err)
 	}
 
+	// Spawn a goroutine to reconcile proxysql_servers against currently-running pods.
+	// This cleans up stale entries from previous deployments that were never removed
+	// because their deletion events were missed. Retries until ProxySQL is ready.
+	p.podWg.Go(func() { //nolint:contextcheck
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), podAddedRetryTimeout)
+		defer reconcileCancel()
+
+		for {
+			if reconcileCtx.Err() != nil {
+				slog.Error("startup reconciliation timed out")
+
+				return
+			}
+
+			if err := p.reconcileCluster(reconcileCtx); err != nil {
+				slog.Debug("startup reconciliation failed, retrying", slog.Any("error", err))
+				time.Sleep(p.retryDelay)
+
+				continue
+			}
+
+			return
+		}
+	})
+
 	// block the main go routine from exiting
 	<-stopper
 
@@ -278,6 +303,95 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 			slog.Error("error in removePod()", slog.Any("err", err))
 		}
 	}
+}
+
+// reconcileCluster removes stale entries from proxysql_servers that don't correspond
+// to any currently-running core pod. It's called once at startup to clean up entries
+// left over from previous deployments whose delete events were never processed.
+func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
+	app := p.settings.Core.PodSelector.App
+	component := p.settings.Core.PodSelector.Component
+	namespace := p.settings.Core.PodSelector.Namespace
+
+	podList, err := p.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{
+			"app":       app,
+			"component": component,
+		}).String(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	runningIPs := make(map[string]bool)
+
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+
+		if pod.Status.Phase == v1.PodRunning && pod.Status.PodIP != "" {
+			runningIPs[pod.Status.PodIP] = true
+		}
+	}
+
+	rows, err := p.conn.QueryContext(ctx, "SELECT hostname FROM proxysql_servers")
+	if err != nil {
+		return fmt.Errorf("failed to query proxysql_servers: %w", err)
+	}
+
+	defer rows.Close()
+
+	var stale []string
+
+	for rows.Next() {
+		var hostname string
+
+		if err := rows.Scan(&hostname); err != nil {
+			return fmt.Errorf("failed to scan hostname: %w", err)
+		}
+
+		if hostname == "proxysql-core" {
+			continue
+		}
+
+		if !runningIPs[hostname] {
+			stale = append(stale, hostname)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading proxysql_servers rows: %w", err)
+	}
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	slog.Info("startup reconciliation: removing stale entries", slog.Int("count", len(stale)))
+
+	for _, hostname := range stale {
+		slog.Info("removing stale proxysql_servers entry", slog.String("hostname", hostname))
+
+		if _, err := p.conn.ExecContext(ctx, fmt.Sprintf("DELETE FROM proxysql_servers WHERE hostname = %q", hostname)); err != nil {
+			return fmt.Errorf("failed to delete stale entry %q: %w", hostname, err)
+		}
+	}
+
+	commands := []string{
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
+
+	for _, cmd := range commands {
+		if _, err := p.conn.ExecContext(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to execute %q: %w", cmd, err)
+		}
+	}
+
+	return nil
 }
 
 // podDeleted handles pod deletion events from the informer. It removes the pod from

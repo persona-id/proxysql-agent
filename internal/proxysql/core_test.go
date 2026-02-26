@@ -15,6 +15,8 @@ import (
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -606,6 +608,175 @@ func TestRemovePodFromCluster(t *testing.T) {
 			err = mock.ExpectationsWereMet()
 			if err != nil {
 				t.Errorf("Unfulfilled expectations: %s", err)
+			}
+		})
+	}
+}
+
+func TestReconcileCluster(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		pods        []*v1.Pod
+		setupMock   func(mock sqlmock.Sqlmock)
+		expectedErr bool
+	}{
+		{
+			name: "no stale entries: nothing deleted",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod",
+						Namespace: "proxysql",
+						Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					},
+					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+			},
+		},
+		{
+			name: "stale entries are removed",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod",
+						Namespace: "proxysql",
+						Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					},
+					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnRows(sqlmock.NewRows([]string{"hostname"}).
+						AddRow("10.0.0.1").
+						AddRow("10.0.0.2").
+						AddRow("10.0.0.3"))
+
+				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.2"`).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.3"`).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "proxysql-core placeholder is never deleted",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod",
+						Namespace: "proxysql",
+						Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					},
+					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnRows(sqlmock.NewRows([]string{"hostname"}).
+						AddRow("proxysql-core").
+						AddRow("10.0.0.1"))
+			},
+		},
+		{
+			name: "non-running pods treated as absent",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pending-pod",
+						Namespace: "proxysql",
+						Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					},
+					Status: v1.PodStatus{Phase: v1.PodPending, PodIP: "10.0.0.1"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+
+				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`).
+					WillReturnResult(sqlmock.NewResult(1, 1))
+
+				expectRuntimeLoads(mock)
+			},
+		},
+		{
+			name: "error querying proxysql_servers returns error",
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-pod",
+						Namespace: "proxysql",
+						Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					},
+					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+				},
+			},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnError(errSQLTest)
+			},
+			expectedErr: true,
+		},
+		{
+			name: "error deleting stale entry returns error",
+			pods: []*v1.Pod{},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+					WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+
+				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`).
+					WillReturnError(errSQLTest)
+			},
+			expectedErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Failed to create mock database connection: %v", err)
+			}
+
+			t.Cleanup(func() { db.Close() })
+
+			mock.MatchExpectationsInOrder(true)
+
+			objs := make([]runtime.Object, len(tc.pods))
+			for i, pod := range tc.pods {
+				objs[i] = pod
+			}
+
+			p := &ProxySQL{
+				clientset:     k8sfake.NewClientset(objs...),
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownOnce:  sync.Once{},
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+			}
+
+			tc.setupMock(mock)
+
+			err = p.reconcileCluster(context.Background())
+
+			if (err != nil) != tc.expectedErr {
+				t.Errorf("reconcileCluster() error = %v, wantErr %v", err, tc.expectedErr)
+			}
+
+			if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+				t.Errorf("Unfulfilled expectations: %s", mockErr)
 			}
 		})
 	}
