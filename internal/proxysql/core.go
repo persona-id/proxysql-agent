@@ -82,6 +82,11 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 					shutdownErr = err
 				}
 
+				// Wait for in-flight podAdded/reconcile goroutines before closing the
+				// connection. startDraining sets IsShuttingDown()=true so they exit on
+				// their next check, which happens quickly (within a single SQL round-trip).
+				p.podWg.Wait()
+
 				// Perform graceful shutdown
 				err = p.gracefulShutdown(context.Background())
 				if err != nil {
@@ -92,6 +97,10 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 					}
 				}
 			})
+
+			// Shut down the HTTP server outside gracefulShutdown to avoid the
+			// preStop handler deadlock (see shutdownHTTPServer for details).
+			p.shutdownHTTPServer() //nolint:contextcheck
 
 			select {
 			case <-stopper:
@@ -150,6 +159,10 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 			if reconcileCtx.Err() != nil {
 				slog.Error("startup reconciliation timed out")
 
+				return
+			}
+
+			if p.IsShuttingDown() {
 				return
 			}
 

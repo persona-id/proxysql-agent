@@ -3,10 +3,13 @@ package proxysql
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"regexp"
 	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 )
@@ -138,6 +141,70 @@ func TestSatelliteResync(t *testing.T) {
 	}
 }
 
+func TestGracefulShutdownDoesNotCloseHTTPServer(t *testing.T) {
+	// gracefulShutdown should NOT shut down the HTTP server.
+	// The preStop handler calls gracefulShutdown from within an active HTTP request.
+	// If gracefulShutdown calls httpServer.Shutdown(), it deadlocks: Shutdown waits
+	// for the in-flight preStop request to complete, but that request is blocked waiting
+	// for gracefulShutdown to return. The HTTP server is shut down by Satellite() instead,
+	// which runs outside of any HTTP handler.
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
+
+	defer db.Close()
+
+	mock.ExpectExec("PROXYSQL SHUTDOWN SLOW").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectClose()
+
+	// Short shutdown timeout so the drain loop exits quickly via context expiry.
+	cfg := newTestConfig()
+	cfg.Shutdown.ShutdownTimeout = 1
+
+	// Start a real HTTP server on a random port to detect whether it gets shut down.
+	ln, listenErr := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("failed to create listener: %v", listenErr)
+	}
+
+	server := &http.Server{
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() { _ = server.Serve(ln) }()
+
+	defer server.Close()
+
+	proxy := &ProxySQL{
+		conn:          db,
+		settings:      cfg,
+		shutdownPhase: PhaseDraining,
+		shutdownMu:    sync.RWMutex{},
+		httpServer:    server,
+	}
+
+	if err := proxy.gracefulShutdown(context.Background()); err != nil {
+		t.Errorf("gracefulShutdown() returned unexpected error: %v", err)
+	}
+
+	// The HTTP server must still be accepting connections after gracefulShutdown returns.
+	addr := ln.Addr().String()
+
+	conn, dialErr := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", addr)
+	if dialErr != nil {
+		t.Errorf("HTTP server should still be running after gracefulShutdown(), got: %v", dialErr)
+	} else {
+		conn.Close()
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("SQL expectations not met: %v", err)
+	}
+}
+
 func TestStartDraining(t *testing.T) {
 	t.Parallel()
 
@@ -199,6 +266,46 @@ func TestStartDraining(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
+	// When the drain context expires (the common case — drain timeout fires before
+	// all clients disconnect), gracefulShutdown must still send "PROXYSQL SHUTDOWN SLOW"
+	// to ProxySQL so it can drain its own active sessions gracefully.
+	// The bug: ExecContext(shutdownCtx, ...) fails immediately with context.DeadlineExceeded
+	// when shutdownCtx is already expired, silently skipping the shutdown command.
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
+
+	defer db.Close()
+
+	mock.MatchExpectationsInOrder(true)
+	mock.ExpectExec("PROXYSQL SHUTDOWN SLOW").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectClose()
+
+	proxy := &ProxySQL{
+		conn:          db,
+		settings:      newTestConfig(),
+		shutdownPhase: PhaseDraining,
+		shutdownMu:    sync.RWMutex{},
+	}
+
+	// Use a pre-cancelled context so shutdownCtx (derived from it) is immediately expired.
+	// This simulates the common case where the drain timeout fires.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := proxy.gracefulShutdown(ctx); err != nil {
+		t.Errorf("gracefulShutdown() unexpected error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("SQL expectations not met: %v", err)
 	}
 }
 

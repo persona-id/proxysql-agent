@@ -204,6 +204,31 @@ func (p *ProxySQL) SetHTTPServer(server *http.Server) {
 	p.httpServer = server
 }
 
+// shutdownHTTPServer gracefully stops the HTTP server if one is set.
+// It must be called from outside any active HTTP handler to avoid deadlocking:
+// httpServer.Shutdown waits for in-flight requests to complete, so calling it
+// from within an HTTP handler would wait forever for itself.
+func (p *ProxySQL) shutdownHTTPServer() {
+	p.shutdownMu.RLock()
+	httpServer := p.httpServer
+	p.shutdownMu.RUnlock()
+
+	if httpServer == nil {
+		return
+	}
+
+	slog.Info("shutting down HTTP server")
+
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
+	defer httpCancel()
+
+	if err := httpServer.Shutdown(httpCtx); err != nil {
+		slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
+	} else {
+		slog.Info("HTTP server shutdown completed")
+	}
+}
+
 // setShutdownPhase updates the shutdown phase with logging.
 func (p *ProxySQL) setShutdownPhase(phase ShutdownPhase) {
 	p.shutdownMu.Lock()

@@ -44,6 +44,10 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 				}
 			})
 
+			// Shut down the HTTP server outside gracefulShutdown to avoid the
+			// preStop handler deadlock (see shutdownHTTPServer for details).
+			p.shutdownHTTPServer() //nolint:contextcheck
+
 			return shutdownErr
 
 		case <-ticker.C:
@@ -333,7 +337,7 @@ shutdown_proxysql:
 	if p.conn != nil {
 		slog.Info("shutting down ProxySQL")
 
-		_, err := p.conn.ExecContext(shutdownCtx, "PROXYSQL SHUTDOWN SLOW")
+		_, err := p.conn.ExecContext(context.Background(), "PROXYSQL SHUTDOWN SLOW") //nolint:contextcheck
 		if err != nil {
 			slog.Error("failed to shutdown ProxySQL", slog.Any("error", err))
 			// Continue with cleanup even if ProxySQL shutdown fails
@@ -352,26 +356,7 @@ shutdown_proxysql:
 		}
 	}
 
-	// Step 5: Stop HTTP server
-	p.shutdownMu.RLock()
-	httpServer := p.httpServer
-	p.shutdownMu.RUnlock()
-
-	if httpServer != nil {
-		slog.Info("shutting down HTTP server")
-
-		serverShutdownCtx, serverCancel := context.WithTimeout(shutdownCtx, 10*time.Second) //nolint:mnd
-		defer serverCancel()
-
-		err := httpServer.Shutdown(serverShutdownCtx)
-		if err != nil {
-			slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
-		} else {
-			slog.Info("HTTP server shutdown completed")
-		}
-	}
-
-	// Step 6: Mark as fully stopped
+	// Step 5: Mark as fully stopped
 	p.setShutdownPhase(PhaseStopped)
 	slog.Info("graceful shutdown completed successfully")
 

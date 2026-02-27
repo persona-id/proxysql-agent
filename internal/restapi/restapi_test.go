@@ -82,7 +82,9 @@ func TestStartAPIServerConfiguration(t *testing.T) {
 				t.Errorf("StartAPI() ReadTimeout = %v, want %v", server.ReadTimeout, expectedReadTimeout)
 			}
 
-			expectedWriteTimeout := 10 * time.Second
+			// WriteTimeout is ShutdownTimeout + 15s buffer so the preStop handler
+			// can complete before the server drops the connection.
+			expectedWriteTimeout := time.Duration(config.Shutdown.ShutdownTimeout+15) * time.Second
 			if server.WriteTimeout != expectedWriteTimeout {
 				t.Errorf("StartAPI() WriteTimeout = %v, want %v", server.WriteTimeout, expectedWriteTimeout)
 			}
@@ -251,7 +253,7 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 		expected time.Duration
 	}{
 		{"ReadTimeout", server.ReadTimeout, 10 * time.Second},
-		{"WriteTimeout", server.WriteTimeout, 10 * time.Second},
+		{"WriteTimeout", server.WriteTimeout, time.Duration(config.Shutdown.ShutdownTimeout+15) * time.Second},
 		{"IdleTimeout", server.IdleTimeout, 30 * time.Second},
 		{"ReadHeaderTimeout", server.ReadHeaderTimeout, 5 * time.Second},
 	}
