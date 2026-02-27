@@ -269,10 +269,13 @@ func TestProbeClients(t *testing.T) {
 			expectedErr:   false,
 		},
 		{
-			name:          "shutting down returns zero",
-			setupMock:     func(_ sqlmock.Sqlmock) {},
+			name: "returns actual count while draining",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(15)
+				mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			},
 			shutdownPhase: PhaseDraining,
-			expectedCount: 0,
+			expectedCount: 15,
 			expectedErr:   false,
 		},
 		{

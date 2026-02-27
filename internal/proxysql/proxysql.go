@@ -167,8 +167,8 @@ func processResults(results ProbeResult) ProbeResult {
 }
 
 func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected */, error) {
-	// If connection is closed or we're shutting down, return 0 clients
-	if p.conn == nil || p.IsShuttingDown() {
+	// If connection is nil, return 0 clients
+	if p.conn == nil {
 		return 0, nil
 	}
 
