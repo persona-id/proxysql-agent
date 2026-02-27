@@ -254,17 +254,6 @@ func (p *ProxySQL) startDraining() error {
 
 	slog.Info("created drain file", slog.String("path", drainFile))
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
-	defer shutdownCancel()
-
-	_, execErr := p.conn.ExecContext(shutdownCtx, "PROXYSQL PAUSE")
-	if execErr != nil {
-		// Continue with shutdown even if pause fails
-		slog.Error("failed to pause ProxySQL", slog.Any("error", execErr))
-	} else {
-		slog.Info("ProxySQL paused")
-	}
-
 	return nil
 }
 

@@ -3,6 +3,7 @@ package proxysql
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
 	"sync"
 	"testing"
@@ -134,6 +135,70 @@ func TestSatelliteResync(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	if err != nil {
 		t.Errorf("There were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestStartDraining(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		drainFile   func(t *testing.T) string
+		expectedErr bool
+	}{
+		{
+			name: "creates drain file and sets phase without sql",
+			drainFile: func(t *testing.T) string {
+				t.Helper()
+
+				return t.TempDir() + "/draining"
+			},
+			expectedErr: false,
+		},
+		{
+			name: "returns error when drain file path is invalid",
+			drainFile: func(_ *testing.T) string {
+				return "/nonexistent/path/draining"
+			},
+			expectedErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			drainFile := tt.drainFile(t)
+			cfg := newTestConfig()
+			cfg.Shutdown.DrainingFile = drainFile
+
+			proxy := &ProxySQL{
+				conn:          nil, // no SQL should be executed during startDraining
+				settings:      cfg,
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+			}
+
+			err := proxy.startDraining()
+
+			if (err != nil) != tt.expectedErr {
+				t.Errorf("startDraining() error = %v, wantErr %v", err, tt.expectedErr)
+			}
+
+			if !tt.expectedErr {
+				if _, statErr := os.Stat(drainFile); statErr != nil {
+					t.Errorf("drain file should exist: %v", statErr)
+				}
+
+				proxy.shutdownMu.RLock()
+				phase := proxy.shutdownPhase
+				proxy.shutdownMu.RUnlock()
+
+				if phase != PhaseDraining {
+					t.Errorf("shutdownPhase = %v, want PhaseDraining", phase)
+				}
+			}
+		})
 	}
 }
 
