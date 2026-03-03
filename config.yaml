@@ -61,5 +61,15 @@ satellite:
 api:
   # Port for the HTTP API server; defaults to 8080
   port: 8080
+
+# Graceful shutdown configuration
+shutdown:
   # Path to the draining status file; defaults to /var/lib/proxysql/draining
   draining_file: "/var/lib/proxysql/draining"
+  # Seconds to wait for client connections to drain before shutting down ProxySQL.
+  # Must exceed kube-proxy endpoint propagation time (~15-25s). 60s gives ample
+  # buffer even on large or loaded clusters. Defaults to 30.
+  drain_timeout: 60
+  # Seconds before the shutdown process is forcibly abandoned. Must exceed
+  # drain_timeout. Defaults to 60.
+  shutdown_timeout: 75

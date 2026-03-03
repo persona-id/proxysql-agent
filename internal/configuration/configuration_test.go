@@ -281,6 +281,9 @@ func TestFlags(t *testing.T) {
 		"--core.podselector.app=proxysql-green",
 		"--core.podselector.component=notcore",
 		"--satellite.interval=5533",
+		"--shutdown.drain_timeout=45",
+		"--shutdown.shutdown_timeout=80",
+		"--shutdown.draining_file=/tmp/test-draining",
 	}
 
 	// Set up test
@@ -314,6 +317,9 @@ func TestFlags(t *testing.T) {
 		{"Core.PodSelector.App", "proxysql-green", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "notcore", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 5533, config.Satellite.Interval},
+		{"Shutdown.DrainTimeout", 45, config.Shutdown.DrainTimeout},
+		{"Shutdown.ShutdownTimeout", 80, config.Shutdown.ShutdownTimeout},
+		{"Shutdown.DrainingFile", "/tmp/test-draining", config.Shutdown.DrainingFile},
 	}
 
 	for _, tt := range tests {
