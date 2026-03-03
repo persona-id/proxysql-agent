@@ -24,9 +24,12 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 
 	port := fmt.Sprintf(":%d", settings.API.Port)
 
-	// WriteTimeout must exceed ShutdownTimeout because the preStop handler blocks
-	// for the full graceful shutdown duration before returning a response.
-	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+15) * time.Second //nolint:mnd
+	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
+	// blocks for the full graceful shutdown duration before returning a response.
+	// The extra headroom covers work outside the shutdown context timeout:
+	// startDraining(), PROXYSQL SHUTDOWN SLOW, and conn.Close().
+	const shutdownHeadroom = 15
+	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
 
 	// Create a server with reasonable timeouts
 	server := &http.Server{

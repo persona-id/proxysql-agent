@@ -58,8 +58,8 @@ func TestGetMissingCorePods(t *testing.T) {
 				conn:          db,
 				settings:      newTestConfig(),
 				shutdownOnce:  sync.Once{},
-				shutdownPhase: PhaseRunning,
 				shutdownMu:    sync.RWMutex{},
+				shutdownPhase: PhaseRunning,
 				httpServer:    nil,
 			}
 
@@ -111,11 +111,11 @@ func TestSatelliteResync(t *testing.T) {
 	p := &ProxySQL{
 		clientset:     nil,
 		conn:          db,
+		httpServer:    nil,
 		settings:      newTestConfig(),
+		shutdownMu:    sync.RWMutex{},
 		shutdownOnce:  sync.Once{},
 		shutdownPhase: PhaseRunning,
-		shutdownMu:    sync.RWMutex{},
-		httpServer:    nil,
 	}
 
 	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")

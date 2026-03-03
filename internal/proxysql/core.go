@@ -313,7 +313,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 		err := p.removePodFromCluster(ctx, oldpod)
 		if err != nil {
 			// Log the error but continue execution since this is a callback function
-			slog.Error("error in removePod()", slog.Any("err", err))
+			slog.Error("error in podDeleted()", slog.Any("err", err))
 		}
 	}
 }
@@ -432,7 +432,7 @@ func (p *ProxySQL) podDeleted(object any) {
 	ctx := context.Background()
 
 	if err := p.removePodFromCluster(ctx, pod); err != nil {
-		slog.Error("error in removePod()", slog.Any("err", err))
+		slog.Error("error in removePodFromCluster()", slog.Any("err", err))
 	}
 }
 
