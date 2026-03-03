@@ -296,7 +296,12 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 
 	drainStart := time.Now()
 
-	ticker := time.NewTicker(2 * time.Second) //nolint:mnd
+	tickInterval := p.drainTickInterval
+	if tickInterval == 0 {
+		tickInterval = 2 * time.Second //nolint:mnd
+	}
+
+	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
 	for {
@@ -320,12 +325,6 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 			}
 
 			slog.Debug("monitoring client connections", slog.Int("clients", clients))
-
-			if clients == 0 {
-				slog.Info("all client connections drained", slog.Duration("drain_time", time.Since(drainStart)))
-
-				goto shutdown_proxysql
-			}
 		}
 	}
 

@@ -309,6 +309,39 @@ func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
 	}
 }
 
+func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
+	// gracefulShutdown must NOT exit early when clients == 0.
+	// With 64 pods, any given pod frequently has zero active queries at T=2s.
+	// Exiting early means PROXYSQL SHUTDOWN SLOW fires before kube-proxy removes
+	// the endpoint (~15-20s), so new connections get RST'd during TCP/SSL handshake.
+	t.Parallel()
+
+	cfg := newTestConfig()
+	cfg.Shutdown.DrainTimeout = 1 // 1 second minimum drain time
+	cfg.Shutdown.ShutdownTimeout = 5
+
+	proxy := &ProxySQL{
+		conn:              nil, // ProbeClients returns 0 with nil conn — simulates zero active clients
+		settings:          cfg,
+		shutdownPhase:     PhaseDraining,
+		shutdownMu:        sync.RWMutex{},
+		drainTickInterval: 50 * time.Millisecond,
+	}
+
+	start := time.Now()
+
+	if err := proxy.gracefulShutdown(context.Background()); err != nil {
+		t.Errorf("gracefulShutdown() unexpected error: %v", err)
+	}
+
+	elapsed := time.Since(start)
+	drainTime := time.Duration(cfg.Shutdown.DrainTimeout) * time.Second
+
+	if elapsed < drainTime {
+		t.Errorf("gracefulShutdown exited before drainTime: elapsed=%v, want >= %v (early clients==0 exit still present)", elapsed, drainTime)
+	}
+}
+
 func TestDumpQueryDigests(t *testing.T) {
 	t.Parallel()
 
