@@ -226,7 +226,7 @@ func (p *ProxySQL) podAdded(object any) {
 // then adds the pod to the cluster if it is not already present. It is called from a goroutine
 // spawned by podAdded and can be called directly in tests.
 func (p *ProxySQL) addPodWhenReady(ctx context.Context, pod *v1.Pod) {
-	cmd := "SELECT count(*) FROM proxysql_servers WHERE hostname = ?"
+	cmd := fmt.Sprintf("SELECT count(*) FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP) //nolint:gosec
 
 	for {
 		if ctx.Err() != nil {
@@ -244,7 +244,7 @@ func (p *ProxySQL) addPodWhenReady(ctx context.Context, pod *v1.Pod) {
 
 		var count int
 
-		err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
+		err := p.conn.QueryRowContext(ctx, cmd).Scan(&count)
 		if err != nil {
 			if ctx.Err() != nil {
 				slog.Error("error in podAdded()",

@@ -246,8 +246,8 @@ func TestAddPodWhenReady(t *testing.T) {
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = "pod-ip"`),
+				).WillReturnRows(
 					sqlmock.NewRows([]string{"count"}).AddRow(1),
 				)
 			},
@@ -270,8 +270,8 @@ func TestAddPodWhenReady(t *testing.T) {
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = "pod-ip"`),
+				).WillReturnRows(
 					sqlmock.NewRows([]string{"count"}).AddRow(0),
 				)
 
@@ -305,8 +305,8 @@ func TestAddPodWhenReady(t *testing.T) {
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("other-pod-ip").WillReturnRows(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = "other-pod-ip"`),
+				).WillReturnRows(
 					sqlmock.NewRows([]string{"count"}).AddRow(0),
 				)
 
@@ -342,13 +342,13 @@ func TestAddPodWhenReady(t *testing.T) {
 				// Fail 5 times — more than the old 3-retry maximum.
 				for range 5 {
 					mock.ExpectQuery(
-						regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-					).WithArgs("pod-ip").WillReturnError(errSQLTest)
+						regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = "pod-ip"`),
+					).WillReturnError(errSQLTest)
 				}
 
 				mock.ExpectQuery(
-					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = ?`),
-				).WithArgs("pod-ip").WillReturnRows(
+					regexp.QuoteMeta(`SELECT count(*) FROM proxysql_servers WHERE hostname = "pod-ip"`),
+				).WillReturnRows(
 					sqlmock.NewRows([]string{"count"}).AddRow(0),
 				)
 
