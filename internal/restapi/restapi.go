@@ -24,12 +24,19 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 
 	port := fmt.Sprintf(":%d", settings.API.Port)
 
+	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
+	// blocks for the full graceful shutdown duration before returning a response.
+	// The extra headroom covers work outside the shutdown context timeout:
+	// startDraining(), PROXYSQL SHUTDOWN SLOW, and conn.Close().
+	const shutdownHeadroom = 15
+	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
+
 	// Create a server with reasonable timeouts
 	server := &http.Server{
 		Addr:              port,
 		Handler:           mux,
 		ReadTimeout:       10 * time.Second, //nolint:mnd
-		WriteTimeout:      10 * time.Second, //nolint:mnd
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       30 * time.Second, //nolint:mnd
 		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
 	}
@@ -99,17 +106,16 @@ func livenessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) ht
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshalling JSON", slog.Any("err", err))
+			w.WriteHeader(http.StatusInternalServerError)
 
 			return
 		}
 
-		// we want to remain live even during draining, so that we can ensure that the pod
-		// isn't killed while there are queries in flight
-		if results.Status == "ok" || results.Status == "draining" {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
+		// Liveness should always pass as long as the agent can talk to ProxySQL.
+		// Backends being offline is not a reason to kill the pod — restarting
+		// the pod won't fix external backends, and killing it during draining
+		// would drop in-flight queries.
+		w.WriteHeader(http.StatusOK)
 
 		// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter
 		fmt.Fprint(w, string(resultJSON))
@@ -184,16 +190,17 @@ func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) h
 		resultJSON, err := json.Marshal(results)
 		if err != nil {
 			slog.Error("Error marshaling json", slog.Any("err", err))
+			w.WriteHeader(http.StatusInternalServerError)
 
 			return
 		}
 
-		// we want to remain live even during draining, so that we can ensure that the proxysql container
-		// isn't killed while there are transactions in flight
-		if results.Status == "draining" {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		} else {
+		// Readiness should only pass when all backends are healthy. If backends
+		// are offline or draining, stop sending traffic to this pod.
+		if results.Status == "ok" {
 			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 
 		// nosemgrep:go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter

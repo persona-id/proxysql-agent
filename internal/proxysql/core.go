@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -83,6 +82,11 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 					shutdownErr = err
 				}
 
+				// Wait for in-flight podAdded/reconcile goroutines before closing the
+				// connection. startDraining sets IsShuttingDown()=true so they exit on
+				// their next check, which happens quickly (within a single SQL round-trip).
+				p.podWg.Wait()
+
 				// Perform graceful shutdown
 				err = p.gracefulShutdown(context.Background())
 				if err != nil {
@@ -93,6 +97,10 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 					}
 				}
 			})
+
+			// Shut down the HTTP server outside gracefulShutdown to avoid the
+			// preStop handler deadlock (see shutdownHTTPServer for details).
+			p.shutdownHTTPServer() //nolint:contextcheck
 
 			select {
 			case <-stopper:
@@ -134,60 +142,135 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 	_, err := podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    p.podAdded,
 		UpdateFunc: p.podUpdated,
-		DeleteFunc: nil,
+		DeleteFunc: p.podDeleted,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add event handler to pod informer: %w", err)
 	}
 
+	// Spawn a goroutine to reconcile proxysql_servers against currently-running pods.
+	// This cleans up stale entries from previous deployments that were never removed
+	// because their deletion events were missed. Retries until ProxySQL is ready.
+	p.podWg.Go(func() { //nolint:contextcheck
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), podAddedRetryTimeout)
+		defer reconcileCancel()
+
+		for {
+			if reconcileCtx.Err() != nil {
+				slog.Error("startup reconciliation timed out")
+
+				return
+			}
+
+			if p.IsShuttingDown() {
+				return
+			}
+
+			if err := p.reconcileCluster(reconcileCtx); err != nil {
+				slog.Debug("startup reconciliation failed, retrying", slog.Any("error", err))
+				time.Sleep(p.retryDelay)
+
+				continue
+			}
+
+			return
+		}
+	})
+
 	// block the main go routine from exiting
 	<-stopper
+
+	// Wait for all in-flight podAdded goroutines to complete before returning.
+	p.podWg.Wait()
 
 	return nil
 }
 
-// This function is needed to do bootstrapping. At first I was using podUpdated to do adds, but we would never
-// get the first pod to come up. This function will only be useful on the first core pod to come up, the rest will
-// be handled via podUpdated.
-//
-// This feels a bit clumsy.
-func (p *ProxySQL) podAdded(object any) {
-	ctx := context.Background() // Use background context for event handlers
+const (
+	// podAddedRetryTimeout is the maximum time podAdded will retry waiting for
+	// ProxySQL's cluster tables to become ready. Observed startup times are ~30s,
+	// so 60s gives comfortable headroom.
+	podAddedRetryTimeout = 60 * time.Second
 
+	// podAddedRetryDelay is the wait between retries when ProxySQL is not yet ready.
+	podAddedRetryDelay = 500 * time.Millisecond
+)
+
+// podAdded handles bootstrapping when core pods start. It fires for all pods visible during
+// the initial informer cache sync. By handling all Running pods (not just own hostname), it covers
+// the case where multiple core pods start simultaneously — each pod adds all peers it sees, so the
+// cluster forms even when no Pending→Running transitions are observed by podUpdated.
+//
+// The actual retry logic runs in a goroutine so the informer is not blocked while waiting for
+// ProxySQL's cluster tables to become ready (which can take ~30s after startup).
+func (p *ProxySQL) podAdded(object any) {
 	pod, ok := object.(*v1.Pod)
 	if !ok {
 		return
 	}
 
-	// if the new pod is not THIS pod, bail out of this function. the rest of this function should only apply
-	// to the first core pod to come up in the cluster.
-	hostname, osErr := os.Hostname()
-	if osErr != nil || pod.Name != hostname {
+	// Only handle Running pods; Pending→Running transitions are caught by podUpdated.
+	if pod.Status.Phase != v1.PodRunning {
 		return
 	}
 
-	// check if pod is already in the proxysql_servers table; this can happen when core pods add
-	// other core pods.
-	var count int
+	ctx, cancel := context.WithTimeout(context.Background(), podAddedRetryTimeout)
 
-	cmd := "SELECT count(*) FROM proxysql_servers WHERE hostname = ?"
+	p.podWg.Go(func() {
+		defer cancel()
+		p.addPodWhenReady(ctx, pod)
+	})
+}
 
-	err := p.conn.QueryRowContext(ctx, cmd, pod.Status.PodIP).Scan(&count)
-	if err != nil {
-		// Log the error but continue execution since this is a callback function
-		slog.Error("error in podAdded()", slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+// addPodWhenReady retries the proxysql_servers availability check until the context expires,
+// then adds the pod to the cluster if it is not already present. It is called from a goroutine
+// spawned by podAdded and can be called directly in tests.
+func (p *ProxySQL) addPodWhenReady(ctx context.Context, pod *v1.Pod) {
+	cmd := fmt.Sprintf("SELECT count(*) FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP) //nolint:gosec
+
+	for {
+		if ctx.Err() != nil {
+			slog.Error("error in podAdded()",
+				slog.String("pod", pod.Name),
+				slog.String("reason", "timed out waiting for proxysql_servers to be ready"),
+			)
+
+			return
+		}
+
+		if p.IsShuttingDown() {
+			return
+		}
+
+		var count int
+
+		err := p.conn.QueryRowContext(ctx, cmd).Scan(&count)
+		if err != nil {
+			if ctx.Err() != nil {
+				slog.Error("error in podAdded()",
+					slog.String("pod", pod.Name),
+					slog.String("reason", "timed out waiting for proxysql_servers to be ready"),
+				)
+
+				return
+			}
+
+			slog.Error("error in podAdded()", slog.String("pod", pod.Name), slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+
+			time.Sleep(p.retryDelay)
+
+			continue
+		}
+
+		if count > 0 {
+			return
+		}
+
+		if err = p.addPodToCluster(ctx, pod); err != nil {
+			slog.Error("error in podAdded()", slog.Any("err", err))
+		}
 
 		return
-	}
-
-	if count > 0 {
-		return
-	}
-
-	err = p.addPodToCluster(ctx, pod)
-	if err != nil {
-		// Log the error but continue execution since this is a callback function
-		slog.Error("error in podAdded()", slog.Any("err", err))
 	}
 }
 
@@ -216,7 +299,7 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 	}
 
 	// Pod is new and transitioned to running, so we add that to the proxysql_servers table.
-	if oldpod.Status.Phase == "Pending" && newpod.Status.Phase == "Running" {
+	if oldpod.Status.Phase == v1.PodPending && newpod.Status.Phase == v1.PodRunning {
 		err := p.addPodToCluster(ctx, newpod)
 		if err != nil {
 			// Log the error but continue execution since this is a callback function
@@ -226,12 +309,130 @@ func (p *ProxySQL) podUpdated(oldobject, newobject any) {
 
 	// Pod is shutting down. Only run this for core pods, as satellites don't need special considerations when
 	// they leave the cluster.
-	if oldpod.Status.Phase == "Running" && newpod.Status.Phase == "Failed" {
+	if oldpod.Status.Phase == v1.PodRunning && (newpod.Status.Phase == v1.PodFailed || newpod.Status.Phase == v1.PodSucceeded) {
 		err := p.removePodFromCluster(ctx, oldpod)
 		if err != nil {
 			// Log the error but continue execution since this is a callback function
-			slog.Error("error in removePod()", slog.Any("err", err))
+			slog.Error("error in podDeleted()", slog.Any("err", err))
 		}
+	}
+}
+
+// reconcileCluster removes stale entries from proxysql_servers that don't correspond
+// to any currently-running core pod. It's called once at startup to clean up entries
+// left over from previous deployments whose delete events were never processed.
+func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
+	app := p.settings.Core.PodSelector.App
+	component := p.settings.Core.PodSelector.Component
+	namespace := p.settings.Core.PodSelector.Namespace
+
+	podList, err := p.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set(map[string]string{
+			"app":       app,
+			"component": component,
+		}).String(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	runningIPs := make(map[string]bool)
+
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+
+		if pod.Status.Phase == v1.PodRunning && pod.Status.PodIP != "" {
+			runningIPs[pod.Status.PodIP] = true
+		}
+	}
+
+	rows, err := p.conn.QueryContext(ctx, "SELECT hostname FROM proxysql_servers")
+	if err != nil {
+		return fmt.Errorf("failed to query proxysql_servers: %w", err)
+	}
+
+	defer rows.Close()
+
+	var stale []string
+
+	for rows.Next() {
+		var hostname string
+
+		if err := rows.Scan(&hostname); err != nil {
+			return fmt.Errorf("failed to scan hostname: %w", err)
+		}
+
+		if hostname == "proxysql-core" {
+			continue
+		}
+
+		if !runningIPs[hostname] {
+			stale = append(stale, hostname)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading proxysql_servers rows: %w", err)
+	}
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	slog.Info("startup reconciliation: removing stale entries", slog.Int("count", len(stale)))
+
+	for _, hostname := range stale {
+		slog.Info("removing stale proxysql_servers entry", slog.String("hostname", hostname))
+
+		if _, err := p.conn.ExecContext(ctx, fmt.Sprintf("DELETE FROM proxysql_servers WHERE hostname = %q", hostname)); err != nil {
+			return fmt.Errorf("failed to delete stale entry %q: %w", hostname, err)
+		}
+	}
+
+	commands := []string{
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
+
+	for _, cmd := range commands {
+		if _, err := p.conn.ExecContext(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to execute %q: %w", cmd, err)
+		}
+	}
+
+	return nil
+}
+
+// podDeleted handles pod deletion events from the informer. It removes the pod from
+// the proxysql_servers table so ProxySQL's cluster monitor stops trying to reach it.
+// The object may be a *v1.Pod or a cache.DeletedFinalStateUnknown tombstone (used when
+// the informer missed the delete event during a resync).
+func (p *ProxySQL) podDeleted(object any) {
+	pod, ok := object.(*v1.Pod)
+	if !ok {
+		tombstone, ok := object.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			slog.Error("error in podDeleted(): unexpected type", slog.String("type", fmt.Sprintf("%T", object)))
+
+			return
+		}
+
+		pod, ok = tombstone.Obj.(*v1.Pod)
+		if !ok {
+			slog.Error("error in podDeleted(): tombstone unexpected type", slog.String("type", fmt.Sprintf("%T", tombstone.Obj)))
+
+			return
+		}
+	}
+
+	ctx := context.Background()
+
+	if err := p.removePodFromCluster(ctx, pod); err != nil {
+		slog.Error("error in removePodFromCluster()", slog.Any("err", err))
 	}
 }
 

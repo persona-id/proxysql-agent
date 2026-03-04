@@ -2,9 +2,7 @@ package proxysql
 
 import (
 	"context"
-	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -46,12 +44,15 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 				}
 			})
 
+			// Shut down the HTTP server outside gracefulShutdown to avoid the
+			// preStop handler deadlock (see shutdownHTTPServer for details).
+			p.shutdownHTTPServer() //nolint:contextcheck
+
 			return shutdownErr
 
 		case <-ticker.C:
-			err := p.SatelliteResync(ctx)
-			if err != nil {
-				return fmt.Errorf("satellite resync failed: %w", err)
+			if err := p.SatelliteResync(ctx); err != nil {
+				slog.Error("satellite resync failed, will retry next interval", slog.Any("error", err))
 			}
 		}
 	}
@@ -119,7 +120,7 @@ func (p *ProxySQL) SatelliteResync(ctx context.Context) error {
 		commands := []string{
 			"DELETE FROM proxysql_servers",
 			"LOAD PROXYSQL SERVERS FROM CONFIG",
-			"LOAD PROXYSQL SERVERS TO RUNTIME;",
+			"LOAD PROXYSQL SERVERS TO RUNTIME",
 		}
 
 		for _, command := range commands {
@@ -220,7 +221,7 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	}
 
 	rows, queryErr := p.conn.QueryContext(ctx, "SELECT * FROM stats_mysql_query_digest")
-	if queryErr != nil && !errors.Is(rows.Err(), sql.ErrNoRows) {
+	if queryErr != nil {
 		return "", fmt.Errorf("failed to query digest data: %w", queryErr)
 	}
 
@@ -273,6 +274,10 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error iterating query digest rows: %w", err)
+	}
+
 	return dumpFile, nil
 }
 
@@ -291,7 +296,12 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 
 	drainStart := time.Now()
 
-	ticker := time.NewTicker(2 * time.Second) //nolint:mnd
+	tickInterval := p.drainTickInterval
+	if tickInterval == 0 {
+		tickInterval = 2 * time.Second //nolint:mnd
+	}
+
+	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
 	for {
@@ -315,12 +325,6 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 			}
 
 			slog.Debug("monitoring client connections", slog.Int("clients", clients))
-
-			if clients == 0 {
-				slog.Info("all client connections drained", slog.Duration("drain_time", time.Since(drainStart)))
-
-				goto shutdown_proxysql
-			}
 		}
 	}
 
@@ -332,7 +336,7 @@ shutdown_proxysql:
 	if p.conn != nil {
 		slog.Info("shutting down ProxySQL")
 
-		_, err := p.conn.ExecContext(shutdownCtx, "PROXYSQL SHUTDOWN SLOW")
+		_, err := p.conn.ExecContext(context.Background(), "PROXYSQL SHUTDOWN SLOW") //nolint:contextcheck
 		if err != nil {
 			slog.Error("failed to shutdown ProxySQL", slog.Any("error", err))
 			// Continue with cleanup even if ProxySQL shutdown fails
@@ -349,26 +353,9 @@ shutdown_proxysql:
 		} else {
 			slog.Info("database connection closed")
 		}
-
-		p.conn = nil
 	}
 
-	// Step 5: Stop HTTP server
-	if p.httpServer != nil {
-		slog.Info("shutting down HTTP server")
-
-		serverShutdownCtx, serverCancel := context.WithTimeout(shutdownCtx, 10*time.Second) //nolint:mnd
-		defer serverCancel()
-
-		err := p.httpServer.Shutdown(serverShutdownCtx)
-		if err != nil {
-			slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
-		} else {
-			slog.Info("HTTP server shutdown completed")
-		}
-	}
-
-	// Step 6: Mark as fully stopped
+	// Step 5: Mark as fully stopped
 	p.setShutdownPhase(PhaseStopped)
 	slog.Info("graceful shutdown completed successfully")
 

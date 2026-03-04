@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 
@@ -43,13 +44,16 @@ func (p ShutdownPhase) String() string {
 }
 
 type ProxySQL struct {
-	clientset     kubernetes.Interface
-	conn          *sql.DB
-	settings      *configuration.Config
-	shutdownOnce  sync.Once
-	shutdownPhase ShutdownPhase
-	shutdownMu    sync.RWMutex
-	httpServer    *http.Server
+	clientset         kubernetes.Interface
+	conn              *sql.DB
+	settings          *configuration.Config
+	shutdownOnce      sync.Once
+	shutdownPhase     ShutdownPhase
+	shutdownMu        sync.RWMutex
+	httpServer        *http.Server
+	retryDelay        time.Duration  // delay between podAdded retries; defaults to podAddedRetryDelay
+	drainTickInterval time.Duration  // interval for drain polling; 0 means use 2s default
+	podWg             sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
@@ -80,6 +84,8 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		shutdownPhase: PhaseRunning,
 		shutdownMu:    sync.RWMutex{},
 		httpServer:    nil,
+		retryDelay:    podAddedRetryDelay,
+		podWg:         sync.WaitGroup{},
 	}, nil
 }
 
@@ -96,9 +102,9 @@ func (p *ProxySQL) Ping(ctx context.Context) error {
 
 type ProbeResult struct {
 	Backends *struct {
-		Total   int `json:"total,omitempty"`
 		Online  int `json:"online,omitempty"`
 		Shunned int `json:"shunned,omitempty"`
+		Total   int `json:"total,omitempty"`
 	} `json:"backends,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Message  string `json:"message,omitempty"`
@@ -125,13 +131,13 @@ func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
 		Status:   "",
 		Message:  "",
 		Backends: &struct {
-			Total   int `json:"total,omitempty"`
 			Online  int `json:"online,omitempty"`
 			Shunned int `json:"shunned,omitempty"`
+			Total   int `json:"total,omitempty"`
 		}{
-			Total:   total,
 			Online:  online,
 			Shunned: shunned,
+			Total:   total,
 		},
 	}
 
@@ -141,17 +147,17 @@ func (p *ProxySQL) RunProbes(ctx context.Context) (ProbeResult, error) {
 // Process the ProbeResult and set values for use in the json message the API returns.
 func processResults(results ProbeResult) ProbeResult {
 	switch {
-	case results.Backends.Online > results.Backends.Total:
-		results.Status = "ok"
-		results.Message = "some backends offline"
-
-	case results.Backends.Online == 0:
-		results.Status = "unhealthy"
-		results.Message = "all backends offline"
-
 	case results.Draining:
 		results.Status = "draining"
 		results.Message = "draining traffic"
+
+	case results.Backends.Online == 0:
+		results.Status = "ok"
+		results.Message = "all backends offline"
+
+	case results.Backends.Online < results.Backends.Total:
+		results.Status = "ok"
+		results.Message = "some backends offline"
 
 	default:
 		results.Status = "ok"
@@ -162,8 +168,8 @@ func processResults(results ProbeResult) ProbeResult {
 }
 
 func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected */, error) {
-	// If connection is closed or we're shutting down, return 0 clients
-	if p.conn == nil || p.IsShuttingDown() {
+	// If connection is nil, return 0 clients
+	if p.conn == nil {
 		return 0, nil
 	}
 
@@ -180,7 +186,7 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 		return int(online.Int32), nil
 	}
 
-	return -1, nil
+	return 0, nil
 }
 
 // IsShuttingDown returns true if the ProxySQL instance is in shutdown process.
@@ -193,7 +199,35 @@ func (p *ProxySQL) IsShuttingDown() bool {
 
 // SetHTTPServer sets the HTTP server reference for graceful shutdown.
 func (p *ProxySQL) SetHTTPServer(server *http.Server) {
+	p.shutdownMu.Lock()
+	defer p.shutdownMu.Unlock()
+
 	p.httpServer = server
+}
+
+// shutdownHTTPServer gracefully stops the HTTP server if one is set.
+// It must be called from outside any active HTTP handler to avoid deadlocking:
+// httpServer.Shutdown waits for in-flight requests to complete, so calling it
+// from within an HTTP handler would wait forever for itself.
+func (p *ProxySQL) shutdownHTTPServer() {
+	p.shutdownMu.RLock()
+	httpServer := p.httpServer
+	p.shutdownMu.RUnlock()
+
+	if httpServer == nil {
+		return
+	}
+
+	slog.Info("shutting down HTTP server")
+
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
+	defer httpCancel()
+
+	if err := httpServer.Shutdown(httpCtx); err != nil {
+		slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
+	} else {
+		slog.Info("HTTP server shutdown completed")
+	}
 }
 
 // setShutdownPhase updates the shutdown phase with logging.
@@ -237,22 +271,14 @@ func (p *ProxySQL) startDraining() error {
 
 	drainFile := p.settings.Shutdown.DrainingFile
 
-	_, err := os.Create(drainFile)
+	f, err := os.Create(drainFile)
 	if err != nil {
 		return fmt.Errorf("failed to create drain file %s: %w", drainFile, err)
 	}
 
+	f.Close()
+
 	slog.Info("created drain file", slog.String("path", drainFile))
-
-	shutdownCtx := context.Background()
-
-	_, execErr := p.conn.ExecContext(shutdownCtx, "PROXYSQL PAUSE")
-	if execErr != nil {
-		// Continue with shutdown even if pause fails
-		slog.Error("failed to pause ProxySQL", slog.Any("error", execErr))
-	} else {
-		slog.Info("ProxySQL paused")
-	}
 
 	return nil
 }
@@ -263,22 +289,20 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 		return 0, 0, 0, nil
 	}
 
-	var total, online, shunned int
+	var total int
+	var online, shunned sql.NullInt64
 
-	err := p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers").Scan(&total)
+	// COALESCE guards against NULL when the table is empty, but we also scan into
+	// NullInt64 as a defensive measure in case the database returns NULL anyway.
+	query := `SELECT COUNT(*) AS total,
+		COALESCE(SUM(CASE WHEN status = 'ONLINE' THEN 1 ELSE 0 END), 0) AS online,
+		COALESCE(SUM(CASE WHEN status = 'SHUNNED' THEN 1 ELSE 0 END), 0) AS shunned
+		FROM runtime_mysql_servers`
+
+	err := p.conn.QueryRowContext(ctx, query).Scan(&total, &online, &shunned)
 	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query total backends: %w", err)
+		return -1, -1, -1, fmt.Errorf("failed to query backend status: %w", err)
 	}
 
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'ONLINE'").Scan(&online)
-	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query online backends: %w", err)
-	}
-
-	err = p.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE status = 'SHUNNED'").Scan(&shunned)
-	if err != nil {
-		return -1, -1, -1, fmt.Errorf("failed to query shunned backends: %w", err)
-	}
-
-	return total, online, shunned, nil
+	return total, int(online.Int64), int(shunned.Int64), nil
 }

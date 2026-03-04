@@ -39,6 +39,8 @@ func main() {
 
 	// Set up signal handling for the graceful shutdown and usr{1,2} signals.
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1, syscall.SIGUSR2)
 
