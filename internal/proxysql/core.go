@@ -148,33 +148,13 @@ func (p *ProxySQL) Core(ctx context.Context) error {
 		return fmt.Errorf("failed to add event handler to pod informer: %w", err)
 	}
 
-	// Spawn a goroutine to reconcile proxysql_servers against currently-running pods.
-	// This cleans up stale entries from previous deployments that were never removed
-	// because their deletion events were missed. Retries until ProxySQL is ready.
+	// Spawn a goroutine that reconciles proxysql_servers against currently-running pods.
+	// First performs an initial reconciliation with retries (to clean up stale entries from
+	// previous deployments), then continues running periodically to catch entries that become
+	// stale after startup (e.g. during rolling deployments where old pods terminate after
+	// the initial reconciliation completes).
 	p.podWg.Go(func() { //nolint:contextcheck
-		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), podAddedRetryTimeout)
-		defer reconcileCancel()
-
-		for {
-			if reconcileCtx.Err() != nil {
-				slog.Error("startup reconciliation timed out")
-
-				return
-			}
-
-			if p.IsShuttingDown() {
-				return
-			}
-
-			if err := p.reconcileCluster(reconcileCtx); err != nil {
-				slog.Debug("startup reconciliation failed, retrying", slog.Any("error", err))
-				time.Sleep(p.retryDelay)
-
-				continue
-			}
-
-			return
-		}
+		p.reconcileLoop(context.Background(), time.Duration(p.settings.Core.Interval)*time.Second)
 	})
 
 	// block the main go routine from exiting
@@ -194,7 +174,72 @@ const (
 
 	// podAddedRetryDelay is the wait between retries when ProxySQL is not yet ready.
 	podAddedRetryDelay = 500 * time.Millisecond
+
+	// defaultReconcileInterval is used when the configured core.interval is zero or negative.
+	defaultReconcileInterval = 10 * time.Second
 )
+
+// reconcileLoop performs an initial reconciliation with retries, then runs
+// reconcileCluster periodically at the given interval until the context is
+// cancelled or the agent begins shutting down.
+func (p *ProxySQL) reconcileLoop(ctx context.Context, interval time.Duration) {
+	// Guard against zero/negative interval which would panic in time.NewTicker.
+	if interval <= 0 {
+		interval = defaultReconcileInterval
+	}
+
+	// Phase 1: Initial reconciliation with retries (bounded timeout).
+	initCtx, initCancel := context.WithTimeout(ctx, podAddedRetryTimeout)
+
+	for {
+		if initCtx.Err() != nil {
+			slog.Error("startup reconciliation timed out")
+			initCancel()
+
+			return
+		}
+
+		if p.IsShuttingDown() {
+			initCancel()
+
+			return
+		}
+
+		if err := p.reconcileCluster(initCtx); err != nil {
+			slog.Debug("startup reconciliation failed, retrying", slog.Any("error", err))
+			time.Sleep(p.retryDelay)
+
+			continue
+		}
+
+		break
+	}
+
+	initCancel()
+
+	// Phase 2: Periodic reconciliation.
+	slog.Info("initial reconciliation complete, starting periodic reconciliation",
+		slog.Duration("interval", interval),
+	)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if p.IsShuttingDown() {
+				return
+			}
+
+			if err := p.reconcileCluster(ctx); err != nil {
+				slog.Debug("periodic reconciliation failed", slog.Any("error", err))
+			}
+		}
+	}
+}
 
 // podAdded handles bootstrapping when core pods start. It fires for all pods visible during
 // the initial informer cache sync. By handling all Running pods (not just own hostname), it covers
@@ -255,7 +300,7 @@ func (p *ProxySQL) addPodWhenReady(ctx context.Context, pod *v1.Pod) {
 				return
 			}
 
-			slog.Error("error in podAdded()", slog.String("pod", pod.Name), slog.Any("err", fmt.Errorf("failed to query proxysql_servers: %w", err)))
+			slog.Debug("error in podAdded(), retrying", slog.String("pod", pod.Name), slog.Any("err", err))
 
 			time.Sleep(p.retryDelay)
 
@@ -379,7 +424,7 @@ func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
 		return nil
 	}
 
-	slog.Info("startup reconciliation: removing stale entries", slog.Int("count", len(stale)))
+	slog.Info("reconciliation: removing stale entries", slog.Int("count", len(stale)))
 
 	for _, hostname := range stale {
 		slog.Info("removing stale proxysql_servers entry", slog.String("hostname", hostname))
