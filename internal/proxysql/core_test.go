@@ -875,6 +875,220 @@ func TestPodDeleted(t *testing.T) {
 	}
 }
 
+func TestReconcileLoop(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cleans stale entries on periodic tick", func(t *testing.T) {
+		t.Parallel()
+
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("Failed to create mock: %v", err)
+		}
+
+		t.Cleanup(func() { db.Close() })
+
+		mock.MatchExpectationsInOrder(true)
+
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "core-0",
+				Namespace: "proxysql",
+				Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			},
+			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+		}
+
+		// Round 1 (initial): no stale entries
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+
+		// Round 2 (periodic): stale entry appears and gets cleaned
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnRows(sqlmock.NewRows([]string{"hostname"}).
+				AddRow("10.0.0.1").
+				AddRow("10.0.0.99"))
+
+		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		expectRuntimeLoads(mock)
+
+		p := &ProxySQL{
+			clientset:     k8sfake.NewClientset(pod),
+			conn:          db,
+			settings:      newTestConfig(),
+			shutdownPhase: PhaseRunning,
+			retryDelay:    0,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		p.reconcileLoop(ctx, 10*time.Millisecond)
+
+		if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+			t.Errorf("Unfulfilled expectations: %s", mockErr)
+		}
+	})
+
+	t.Run("exits immediately when shutting down", func(t *testing.T) {
+		t.Parallel()
+
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("Failed to create mock: %v", err)
+		}
+
+		t.Cleanup(func() { db.Close() })
+
+		mock.MatchExpectationsInOrder(true)
+
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "core-0",
+				Namespace: "proxysql",
+				Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			},
+			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+		}
+
+		// No SQL expectations — should exit before querying
+
+		p := &ProxySQL{
+			clientset:     k8sfake.NewClientset(pod),
+			conn:          db,
+			settings:      newTestConfig(),
+			shutdownPhase: PhaseDraining,
+			retryDelay:    0,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		p.reconcileLoop(ctx, 10*time.Millisecond)
+		elapsed := time.Since(start)
+
+		if elapsed > 100*time.Millisecond {
+			t.Errorf("reconcileLoop took %v to exit during shutdown, expected quick exit", elapsed)
+		}
+
+		if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+			t.Errorf("Unfulfilled expectations: %s", mockErr)
+		}
+	})
+
+	t.Run("does not panic with zero interval", func(t *testing.T) {
+		t.Parallel()
+
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("Failed to create mock: %v", err)
+		}
+
+		t.Cleanup(func() { db.Close() })
+
+		mock.MatchExpectationsInOrder(true)
+
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "core-0",
+				Namespace: "proxysql",
+				Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			},
+			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+		}
+
+		// Initial reconciliation succeeds
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+
+		p := &ProxySQL{
+			clientset:     k8sfake.NewClientset(pod),
+			conn:          db,
+			settings:      newTestConfig(),
+			shutdownPhase: PhaseRunning,
+			retryDelay:    0,
+		}
+
+		// Zero interval should not panic — the guard replaces it with a default.
+		// Cancel immediately so the periodic loop exits after initial reconciliation.
+		ctx, cancel := context.WithCancel(context.Background())
+
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}()
+
+		p.reconcileLoop(ctx, 0)
+
+		if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+			t.Errorf("Unfulfilled expectations: %s", mockErr)
+		}
+	})
+
+	t.Run("retries initial reconciliation then runs periodically", func(t *testing.T) {
+		t.Parallel()
+
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("Failed to create mock: %v", err)
+		}
+
+		t.Cleanup(func() { db.Close() })
+
+		mock.MatchExpectationsInOrder(true)
+
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "core-0",
+				Namespace: "proxysql",
+				Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			},
+			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+		}
+
+		// Initial: fail twice
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnError(errSQLTest)
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnError(errSQLTest)
+
+		// Initial: succeed on third attempt
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnRows(sqlmock.NewRows([]string{"hostname"}).AddRow("10.0.0.1"))
+
+		// Periodic: stale entry cleaned
+		mock.ExpectQuery("SELECT hostname FROM proxysql_servers").
+			WillReturnRows(sqlmock.NewRows([]string{"hostname"}).
+				AddRow("10.0.0.1").
+				AddRow("10.0.0.99"))
+
+		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		expectRuntimeLoads(mock)
+
+		p := &ProxySQL{
+			clientset:     k8sfake.NewClientset(pod),
+			conn:          db,
+			settings:      newTestConfig(),
+			shutdownPhase: PhaseRunning,
+			retryDelay:    0,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		p.reconcileLoop(ctx, 10*time.Millisecond)
+
+		if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+			t.Errorf("Unfulfilled expectations: %s", mockErr)
+		}
+	})
+}
+
 // Helper function to set up common runtime load expectations.
 func expectRuntimeLoads(mock sqlmock.Sqlmock) {
 	for _, cmd := range []string{
