@@ -1091,16 +1091,68 @@ func TestReconcileLoop(t *testing.T) {
 
 // Helper function to set up common runtime load expectations.
 func expectRuntimeLoads(mock sqlmock.Sqlmock) {
-	for _, cmd := range []string{
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	} {
+	for _, cmd := range reconcileLoadCommands() {
 		mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+}
+
+func TestReconcileLoadCommands(t *testing.T) {
+	t.Parallel()
+
+	cmds := reconcileLoadCommands()
+
+	// Every configuration area that is reloaded should be reloaded from the
+	// config file layer before being loaded to runtime. proxysql_servers is
+	// intentionally excluded from the FROM CONFIG reload (see docstring on
+	// reconcileLoadCommands).
+	areas := []string{
+		"ADMIN VARIABLES",
+		"MYSQL VARIABLES",
+		"MYSQL SERVERS",
+		"MYSQL USERS",
+		"MYSQL QUERY RULES",
+	}
+
+	for _, area := range areas {
+		fromConfig := "LOAD " + area + " FROM CONFIG"
+		toRuntime := "LOAD " + area + " TO RUNTIME"
+
+		fromIdx := indexOf(cmds, fromConfig)
+		if fromIdx < 0 {
+			t.Errorf("reconcileLoadCommands() missing %q", fromConfig)
+
+			continue
+		}
+
+		toIdx := indexOf(cmds, toRuntime)
+		if toIdx < 0 {
+			t.Errorf("reconcileLoadCommands() missing %q", toRuntime)
+
+			continue
+		}
+
+		if fromIdx >= toIdx {
+			t.Errorf("reconcileLoadCommands() has %q after %q; FROM CONFIG must precede TO RUNTIME", fromConfig, toRuntime)
+		}
+	}
+
+	if indexOf(cmds, "LOAD PROXYSQL SERVERS FROM CONFIG") != -1 {
+		t.Error("reconcileLoadCommands() must not reload proxysql_servers from config; agent manages it dynamically")
+	}
+
+	if indexOf(cmds, "LOAD PROXYSQL SERVERS TO RUNTIME") < 0 {
+		t.Error("reconcileLoadCommands() missing LOAD PROXYSQL SERVERS TO RUNTIME")
+	}
+}
+
+func indexOf(xs []string, target string) int {
+	for i, x := range xs {
+		if x == target {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // Helper function to set up common test infrastructure for pod operations.

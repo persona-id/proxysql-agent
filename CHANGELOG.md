@@ -2,6 +2,10 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## Unreleased
+
+- Core reconciliation now reloads admin variables, mysql variables, mysql servers, mysql users, and mysql query rules from the config file layer (`LOAD ... FROM CONFIG`) before loading them to runtime. This makes the on-disk config file the source of truth on every reconcile and prevents drift from ad-hoc changes to the in-memory tables. `proxysql_servers` is intentionally not reloaded from config because the agent manages cluster membership dynamically.
+
 ## 1.1.7 - 08/26/2025
 
 - Add catching SIGUSR1 and SIGUSR2; the former prints some stats to the log, the latter is NYI

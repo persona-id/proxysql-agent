@@ -434,22 +434,41 @@ func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
 		}
 	}
 
-	commands := []string{
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	}
-
-	for _, cmd := range commands {
+	for _, cmd := range reconcileLoadCommands() {
 		if _, err := p.conn.ExecContext(ctx, cmd); err != nil {
 			return fmt.Errorf("failed to execute %q: %w", cmd, err)
 		}
 	}
 
 	return nil
+}
+
+// reconcileLoadCommands returns the sequence of ProxySQL admin commands used to
+// synchronise the runtime configuration during pod reconciliation.
+//
+// For every configuration area other than proxysql_servers we reload from the
+// config file layer before loading to runtime. This makes the on-disk config
+// file the source of truth for admin variables, mysql variables, mysql
+// servers, mysql users and mysql query rules on every reconcile, and prevents
+// drift from ad-hoc changes that may have been made to the in-memory tables.
+//
+// proxysql_servers is intentionally not reloaded from the config file because
+// the agent manages cluster membership dynamically (adding and removing core
+// pods from the table); reloading from config would clobber those changes.
+func reconcileLoadCommands() []string {
+	return []string{
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES FROM CONFIG",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES FROM CONFIG",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS FROM CONFIG",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS FROM CONFIG",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES FROM CONFIG",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
 }
 
 // podDeleted handles pod deletion events from the informer. It removes the pod from
@@ -508,14 +527,7 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES (%q, %d, 0, %q)", pod.Status.PodIP, port, pod.Name))
 	}
 
-	commands = append(commands,
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	)
+	commands = append(commands, reconcileLoadCommands()...)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {
@@ -556,14 +568,7 @@ func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error 
 		commands = append(commands, fmt.Sprintf("DELETE FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP))
 	}
 
-	commands = append(commands,
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	)
+	commands = append(commands, reconcileLoadCommands()...)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {
