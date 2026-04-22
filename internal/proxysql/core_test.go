@@ -57,7 +57,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -71,7 +71,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -85,7 +85,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 	}
@@ -284,7 +284,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -319,7 +319,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -361,7 +361,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -448,7 +448,7 @@ func TestAddPodToCluster(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -466,7 +466,7 @@ func TestAddPodToCluster(t *testing.T) {
 				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
 					WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectSatelliteRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -541,7 +541,7 @@ func TestRemovePodFromCluster(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -556,7 +556,7 @@ func TestRemovePodFromCluster(t *testing.T) {
 			component: "satellite",
 			namespace: "default",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				expectRuntimeLoads(mock)
+				expectSatelliteRuntimeLoads(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -664,7 +664,7 @@ func TestReconcileCluster(t *testing.T) {
 				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.3"`).
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -705,7 +705,7 @@ func TestReconcileCluster(t *testing.T) {
 				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`).
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -805,7 +805,7 @@ func TestPodDeleted(t *testing.T) {
 					`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`,
 				).WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -819,7 +819,7 @@ func TestPodDeleted(t *testing.T) {
 				Status: v1.PodStatus{PodIP: "10.0.0.1"},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				expectRuntimeLoads(mock)
+				expectSatelliteRuntimeLoads(mock)
 			},
 		},
 		{
@@ -845,7 +845,7 @@ func TestPodDeleted(t *testing.T) {
 					`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`,
 				).WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectCoreReconcileLoads(mock)
 			},
 		},
 		{
@@ -912,7 +912,7 @@ func TestReconcileLoop(t *testing.T) {
 		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		expectRuntimeLoads(mock)
+		expectCoreReconcileLoads(mock)
 
 		p := &ProxySQL{
 			clientset:     k8sfake.NewClientset(pod),
@@ -1068,7 +1068,7 @@ func TestReconcileLoop(t *testing.T) {
 		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		expectRuntimeLoads(mock)
+		expectCoreReconcileLoads(mock)
 
 		p := &ProxySQL{
 			clientset:     k8sfake.NewClientset(pod),
@@ -1089,22 +1089,35 @@ func TestReconcileLoop(t *testing.T) {
 	})
 }
 
-// Helper function to set up common runtime load expectations.
-func expectRuntimeLoads(mock sqlmock.Sqlmock) {
-	for _, cmd := range reconcileLoadCommands() {
+// expectCoreReconcileLoads registers the admin command sequence run when a
+// core pod event triggers reconciliation. Every configuration area other
+// than proxysql_servers is reloaded from the config file layer before being
+// promoted to runtime.
+func expectCoreReconcileLoads(mock sqlmock.Sqlmock) {
+	for _, cmd := range coreReconcileLoadCommands() {
 		mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 }
 
-func TestReconcileLoadCommands(t *testing.T) {
+// expectSatelliteRuntimeLoads registers the admin command sequence run when
+// a satellite pod event triggers reconciliation. Satellite events only
+// promote the existing in-memory configuration to runtime; they do not
+// reload from the config file layer.
+func expectSatelliteRuntimeLoads(mock sqlmock.Sqlmock) {
+	for _, cmd := range satelliteLoadCommands() {
+		mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+}
+
+func TestCoreReconcileLoadCommands(t *testing.T) {
 	t.Parallel()
 
-	cmds := reconcileLoadCommands()
+	cmds := coreReconcileLoadCommands()
 
-	// Every configuration area that is reloaded should be reloaded from the
-	// config file layer before being loaded to runtime. proxysql_servers is
-	// intentionally excluded from the FROM CONFIG reload (see docstring on
-	// reconcileLoadCommands).
+	// Every configuration area that is reloaded on a core reconcile should be
+	// reloaded from the config file layer before being loaded to runtime.
+	// proxysql_servers is intentionally excluded from the FROM CONFIG reload
+	// (see docstring on coreReconcileLoadCommands).
 	areas := []string{
 		"ADMIN VARIABLES",
 		"MYSQL VARIABLES",
@@ -1119,29 +1132,112 @@ func TestReconcileLoadCommands(t *testing.T) {
 
 		fromIdx := indexOf(cmds, fromConfig)
 		if fromIdx < 0 {
-			t.Errorf("reconcileLoadCommands() missing %q", fromConfig)
+			t.Errorf("coreReconcileLoadCommands() missing %q", fromConfig)
 
 			continue
 		}
 
 		toIdx := indexOf(cmds, toRuntime)
 		if toIdx < 0 {
-			t.Errorf("reconcileLoadCommands() missing %q", toRuntime)
+			t.Errorf("coreReconcileLoadCommands() missing %q", toRuntime)
 
 			continue
 		}
 
 		if fromIdx >= toIdx {
-			t.Errorf("reconcileLoadCommands() has %q after %q; FROM CONFIG must precede TO RUNTIME", fromConfig, toRuntime)
+			t.Errorf("coreReconcileLoadCommands() has %q after %q; FROM CONFIG must precede TO RUNTIME", fromConfig, toRuntime)
 		}
 	}
 
 	if indexOf(cmds, "LOAD PROXYSQL SERVERS FROM CONFIG") != -1 {
-		t.Error("reconcileLoadCommands() must not reload proxysql_servers from config; agent manages it dynamically")
+		t.Error("coreReconcileLoadCommands() must not reload proxysql_servers from config; agent manages it dynamically")
 	}
 
 	if indexOf(cmds, "LOAD PROXYSQL SERVERS TO RUNTIME") < 0 {
-		t.Error("reconcileLoadCommands() missing LOAD PROXYSQL SERVERS TO RUNTIME")
+		t.Error("coreReconcileLoadCommands() missing LOAD PROXYSQL SERVERS TO RUNTIME")
+	}
+}
+
+func TestSatelliteLoadCommands(t *testing.T) {
+	t.Parallel()
+
+	cmds := satelliteLoadCommands()
+
+	// Satellite events must not trigger any FROM CONFIG reloads; they only
+	// promote in-memory configuration to runtime.
+	for _, cmd := range cmds {
+		if strings.Contains(cmd, "FROM CONFIG") {
+			t.Errorf("satelliteLoadCommands() must not contain %q", cmd)
+		}
+	}
+
+	want := []string{
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
+
+	for _, cmd := range want {
+		if indexOf(cmds, cmd) < 0 {
+			t.Errorf("satelliteLoadCommands() missing %q", cmd)
+		}
+	}
+}
+
+func TestLoadCommandsForPod(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		component string
+		wantFrom  bool
+	}{
+		{
+			name:      "core pod uses core reconcile sequence",
+			component: "core",
+			wantFrom:  true,
+		},
+		{
+			name:      "satellite pod uses satellite-only sequence",
+			component: "satellite",
+			wantFrom:  false,
+		},
+		{
+			name:      "unlabeled pod falls back to satellite-only sequence",
+			component: "",
+			wantFrom:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			pod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"component": tc.component},
+				},
+			}
+
+			cmds := loadCommandsForPod(pod)
+
+			hasFromConfig := false
+
+			for _, cmd := range cmds {
+				if strings.Contains(cmd, "FROM CONFIG") {
+					hasFromConfig = true
+
+					break
+				}
+			}
+
+			if hasFromConfig != tc.wantFrom {
+				t.Errorf("loadCommandsForPod(component=%q) FROM CONFIG present = %v, want %v", tc.component, hasFromConfig, tc.wantFrom)
+			}
+		})
 	}
 }
 

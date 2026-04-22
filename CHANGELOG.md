@@ -4,7 +4,7 @@ See the [releases](https://github.com/persona-id/proxysql-agent/releases) page f
 
 ## Unreleased
 
-- Core reconciliation now reloads admin variables, mysql variables, mysql servers, mysql users, and mysql query rules from the config file layer (`LOAD ... FROM CONFIG`) before loading them to runtime. This makes the on-disk config file the source of truth on every reconcile and prevents drift from ad-hoc changes to the in-memory tables. `proxysql_servers` is intentionally not reloaded from config because the agent manages cluster membership dynamically.
+- Core reconciliation now reloads admin variables, mysql variables, mysql servers, mysql users, and mysql query rules from the config file layer (`LOAD ... FROM CONFIG`) before loading them to runtime. This makes the on-disk config file the source of truth on every reconcile of a core pod event and prevents drift from ad-hoc changes to the in-memory tables. `proxysql_servers` is intentionally not reloaded from config because the agent manages cluster membership dynamically. Satellite pod events retain the previous behavior of only promoting the in-memory configuration to runtime (no `FROM CONFIG` reload), so they continue to receive configuration from the core cluster without re-applying the local config file.
 
 ## 1.1.7 - 08/26/2025
 

@@ -434,7 +434,7 @@ func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
 		}
 	}
 
-	for _, cmd := range reconcileLoadCommands() {
+	for _, cmd := range coreReconcileLoadCommands() {
 		if _, err := p.conn.ExecContext(ctx, cmd); err != nil {
 			return fmt.Errorf("failed to execute %q: %w", cmd, err)
 		}
@@ -443,19 +443,25 @@ func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
 	return nil
 }
 
-// reconcileLoadCommands returns the sequence of ProxySQL admin commands used to
-// synchronise the runtime configuration during pod reconciliation.
+// coreReconcileLoadCommands returns the sequence of ProxySQL admin commands used
+// to synchronise the runtime configuration when reconciling a core pod event
+// (core pod join/leave or the periodic proxysql_servers reconcile loop).
 //
 // For every configuration area other than proxysql_servers we reload from the
 // config file layer before loading to runtime. This makes the on-disk config
 // file the source of truth for admin variables, mysql variables, mysql
-// servers, mysql users and mysql query rules on every reconcile, and prevents
-// drift from ad-hoc changes that may have been made to the in-memory tables.
+// servers, mysql users and mysql query rules on every core-pod reconcile, and
+// prevents drift from ad-hoc changes that may have been made to the in-memory
+// tables.
 //
 // proxysql_servers is intentionally not reloaded from the config file because
 // the agent manages cluster membership dynamically (adding and removing core
 // pods from the table); reloading from config would clobber those changes.
-func reconcileLoadCommands() []string {
+//
+// This sequence is scoped to the core deployment only. Satellite pod events
+// continue to use satelliteLoadCommands so that satellite-driven reconciles
+// don't repeatedly re-apply the config file.
+func coreReconcileLoadCommands() []string {
 	return []string{
 		"LOAD PROXYSQL SERVERS TO RUNTIME",
 		"LOAD ADMIN VARIABLES FROM CONFIG",
@@ -469,6 +475,34 @@ func reconcileLoadCommands() []string {
 		"LOAD MYSQL QUERY RULES FROM CONFIG",
 		"LOAD MYSQL QUERY RULES TO RUNTIME",
 	}
+}
+
+// satelliteLoadCommands returns the sequence of ProxySQL admin commands run
+// when reconciling a satellite pod event. Satellite pods receive their
+// configuration from the core cluster at runtime, so we only promote whatever
+// is already in memory to runtime here — we do not reload from the config
+// file layer.
+func satelliteLoadCommands() []string {
+	return []string{
+		"LOAD PROXYSQL SERVERS TO RUNTIME",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
+}
+
+// loadCommandsForPod returns the appropriate load-command sequence for the
+// given pod. Core pod events trigger a FROM CONFIG reload of everything
+// except proxysql_servers; satellite pod events only promote memory to
+// runtime.
+func loadCommandsForPod(pod *v1.Pod) []string {
+	if pod.Labels["component"] == "core" {
+		return coreReconcileLoadCommands()
+	}
+
+	return satelliteLoadCommands()
 }
 
 // podDeleted handles pod deletion events from the informer. It removes the pod from
@@ -527,7 +561,7 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES (%q, %d, 0, %q)", pod.Status.PodIP, port, pod.Name))
 	}
 
-	commands = append(commands, reconcileLoadCommands()...)
+	commands = append(commands, loadCommandsForPod(pod)...)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {
@@ -568,7 +602,7 @@ func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error 
 		commands = append(commands, fmt.Sprintf("DELETE FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP))
 	}
 
-	commands = append(commands, reconcileLoadCommands()...)
+	commands = append(commands, loadCommandsForPod(pod)...)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {
