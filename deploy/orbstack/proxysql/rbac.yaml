@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: proxysql
+  namespace: proxysql
+  labels:
+    app: proxysql
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxysql-discovery
+  namespace: proxysql
+  labels:
+    app: proxysql
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxysql-discovery
+  namespace: proxysql
+  labels:
+    app: proxysql
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: proxysql-discovery
+subjects:
+  - kind: ServiceAccount
+    name: proxysql
+    namespace: proxysql

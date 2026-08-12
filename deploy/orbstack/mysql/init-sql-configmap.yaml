@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init
+  namespace: mysql
+  labels:
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS test;
+    CREATE USER IF NOT EXISTS 'proxysql'@'%' IDENTIFIED BY 'proxysql';
+    GRANT ALL PRIVILEGES ON *.* TO 'proxysql'@'%' WITH GRANT OPTION;
+    CREATE USER IF NOT EXISTS 'smoke'@'%' IDENTIFIED BY 'smoke';
+    GRANT ALL PRIVILEGES ON test.* TO 'smoke'@'%';
+    CREATE USER IF NOT EXISTS 'smoke-replica'@'%' IDENTIFIED BY 'smoke';
+    GRANT ALL PRIVILEGES ON test.* TO 'smoke-replica'@'%';
+    FLUSH PRIVILEGES;
+    USE test;
+    CREATE TABLE IF NOT EXISTS smoke_ping (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO smoke_ping () VALUES ();

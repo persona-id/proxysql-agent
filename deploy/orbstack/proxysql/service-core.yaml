@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxysql-core
+  namespace: proxysql
+  labels:
+    app: proxysql
+    component: core
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+spec:
+  clusterIP: None
+  selector:
+    app: proxysql
+    component: core
+  ports:
+    - name: proxysql-admin
+      port: 6032
+      targetPort: 6032
+      protocol: TCP
+      appProtocol: mysql
