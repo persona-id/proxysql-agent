@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxysql-core
+  namespace: proxysql
+  labels:
+    app: proxysql
+    component: core
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+spec:
+  replicas: 2
+  minReadySeconds: 15
+  revisionHistoryLimit: 2
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: proxysql
+      component: core
+  template:
+    metadata:
+      labels:
+        app: proxysql
+        component: core
+    spec:
+      serviceAccountName: proxysql
+      restartPolicy: Always
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: proxysql
+          image: proxysql/proxysql:3.0.2
+          args:
+            - proxysql
+            - -f
+            - --idle-threads
+            - -D
+            - /var/lib/proxysql
+          ports:
+            - containerPort: 6033
+              name: proxysql-mysql
+            - containerPort: 6032
+              name: proxysql-admin
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /shutdown
+                port: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz/started
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+            timeoutSeconds: 1
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 1
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 5
+            timeoutSeconds: 1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: proxysql-config
+              mountPath: /etc/proxysql.cnf
+              subPath: proxysql.cnf
+              readOnly: true
+            - name: proxysql-var
+              mountPath: /var/lib/proxysql
+        - name: proxysql-agent
+          image: proxysql-agent:smoke
+          imagePullPolicy: Never
+          command:
+            - /app/proxysql-agent
+            - --core.podselector.namespace=proxysql
+            - --run_mode=core
+            - --start_delay=5
+            - --log.level=DEBUG
+          env:
+            - name: AGENT_PROXYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: proxysql-passwords
+                  key: radmin
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: proxysql-var
+              mountPath: /var/lib/proxysql
+      volumes:
+        - name: proxysql-config
+          configMap:
+            name: proxysql-config
+            items:
+              - key: proxysql-core.cnf
+                path: proxysql.cnf
+        - name: proxysql-var
+          emptyDir: {}

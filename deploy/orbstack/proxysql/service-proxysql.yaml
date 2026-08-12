@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxysql
+  namespace: proxysql
+  labels:
+    app: proxysql
+    component: satellite
+    app.kubernetes.io/part-of: proxysql-agent-smoke
+spec:
+  type: ClusterIP
+  selector:
+    app: proxysql
+    component: satellite
+  ports:
+    - name: proxysql-mysql
+      port: 6033
+      targetPort: 6033
+      protocol: TCP
+      appProtocol: mysql

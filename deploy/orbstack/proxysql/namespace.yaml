@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proxysql
+  labels:
+    app.kubernetes.io/part-of: proxysql-agent-smoke
