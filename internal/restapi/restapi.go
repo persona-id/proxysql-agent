@@ -27,7 +27,7 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
 	// blocks for the full graceful shutdown duration before returning a response.
 	// The extra headroom covers work outside the shutdown context timeout:
-	// startDraining(), PROXYSQL SHUTDOWN SLOW, and conn.Close().
+	// startDraining(), PROXYSQL SHUTDOWN, and conn.Close().
 	const shutdownHeadroom = 15
 	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
 
@@ -132,20 +132,9 @@ func livenessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) ht
 // If there is an error, it returns a JSON response with the error message and sets the HTTP status to 503 (Service Unavailable).
 // If the status of the ProxySQL instance is "draining", it sets the HTTP status to 503 (Service Unavailable).
 // Otherwise, it sets the HTTP status to 200 (OK) and returns a JSON response with the status and probe results.
-// Perhaps make use of the proxysql pause command and somehow check to see if it's paused:
 //
-//	root@proxysql-satellite-9c949fcd7-ldndc:/tmp# mysql -h127.0.0.1 -P6033 -upersona-web-us1 -ppersona-web-us1 -NB -e 'select 1'
-//		1
-//	root@proxysql-satellite-9c949fcd7-ldndc:/tmp# mysql -e 'proxysql pause' # pause via the admin interface
-//	root@proxysql-satellite-9c949fcd7-ldndc:/tmp# mysql -h127.0.0.1 -P6033 -upersona-web-us1 -ppersona-web-us1 -NB -e 'select 1'
-//		ERROR 2002 (HY000): Can't connect to MySQL server on '127.0.0.1' (115)
-//	root@proxysql-satellite-9c949fcd7-ldndc:/tmp# mysql -e 'proxysql resume' # resume via the admin interface
-//	root@proxysql-satellite-9c949fcd7-ldndc:/tmp# mysql -h127.0.0.1 -P6033 -upersona-web-us1 -ppersona-web-us1 -NB -e 'select 1'
-//		1
-//
-// The main caveat here is we'd need the right username, which is apparently hashed in the proxysql db now. I did confirm
-// that even if a backend is offline, connections to proxysql are accepted; in other words, unless proxysql is paused
-// connections to the serving port with the right creds will succeed.
+// Readiness 503 alone is not enough to drain sticky client pools: the MySQL
+// listener still accepts connections until gracefulShutdown runs PROXYSQL PAUSE.
 func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

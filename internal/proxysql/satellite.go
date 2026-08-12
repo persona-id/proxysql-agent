@@ -281,6 +281,28 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	return dumpFile, nil
 }
 
+// pauseProxySQL stops the MySQL frontend listener and closes idle client
+// connections (PROXYSQL PAUSE sets mysql-wait_timeout=0). Sticky pooled
+// connections would otherwise stay open until PROXYSQL SHUTDOWN severs them
+// mid-flight (Trilogy::EOFError). Pausing lets clients reconnect through the
+// Service to a healthy satellite while this pod drains.
+func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
+	if p.conn == nil {
+		return
+	}
+
+	slog.Info("pausing ProxySQL frontend listener")
+
+	_, err := p.conn.ExecContext(ctx, "PROXYSQL PAUSE")
+	if err != nil {
+		slog.Error("failed to pause ProxySQL", slog.Any("error", err))
+
+		return
+	}
+
+	slog.Info("ProxySQL pause completed")
+}
+
 // gracefulShutdown performs the graceful shutdown logic for satellite mode.
 func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	slog.Info("starting graceful shutdown process")
@@ -290,6 +312,11 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
+
+	// Step 0: Pause the frontend listener before draining. Best-effort: if
+	// PAUSE fails we still drain and shut down. WithoutCancel preserves values
+	// while ensuring PAUSE still fires if the caller's context is already done.
+	p.pauseProxySQL(context.WithoutCancel(shutdownCtx))
 
 	// Step 1: Monitor connection draining
 	slog.Info("monitoring connection drain", slog.Duration("max_wait", drainTime))
@@ -336,7 +363,7 @@ shutdown_proxysql:
 	if p.conn != nil {
 		slog.Info("shutting down ProxySQL")
 
-		_, err := p.conn.ExecContext(context.Background(), "PROXYSQL SHUTDOWN SLOW") //nolint:contextcheck
+		_, err := p.conn.ExecContext(context.Background(), "PROXYSQL SHUTDOWN") //nolint:contextcheck
 		if err != nil {
 			slog.Error("failed to shutdown ProxySQL", slog.Any("error", err))
 			// Continue with cleanup even if ProxySQL shutdown fails

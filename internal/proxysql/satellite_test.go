@@ -157,7 +157,8 @@ func TestGracefulShutdownDoesNotCloseHTTPServer(t *testing.T) {
 
 	defer db.Close()
 
-	mock.ExpectExec("PROXYSQL SHUTDOWN SLOW").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("PROXYSQL SHUTDOWN").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectClose()
 
 	// Short shutdown timeout so the drain loop exits quickly via context expiry.
@@ -271,10 +272,10 @@ func TestStartDraining(t *testing.T) {
 
 func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
 	// When the drain context expires (the common case — drain timeout fires before
-	// all clients disconnect), gracefulShutdown must still send "PROXYSQL SHUTDOWN SLOW"
-	// to ProxySQL so it can drain its own active sessions gracefully.
-	// The bug: ExecContext(shutdownCtx, ...) fails immediately with context.DeadlineExceeded
-	// when shutdownCtx is already expired, silently skipping the shutdown command.
+	// all clients disconnect), gracefulShutdown must still send "PROXYSQL PAUSE"
+	// then "PROXYSQL SHUTDOWN". PAUSE closes idle pooled connections before
+	// SHUTDOWN tears the process down; both use context.Background so they still
+	// fire when the drain budget has already expired.
 	t.Parallel()
 
 	db, mock, err := sqlmock.New()
@@ -285,7 +286,8 @@ func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
 	defer db.Close()
 
 	mock.MatchExpectationsInOrder(true)
-	mock.ExpectExec("PROXYSQL SHUTDOWN SLOW").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("PROXYSQL SHUTDOWN").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectClose()
 
 	proxy := &ProxySQL{
@@ -309,10 +311,23 @@ func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
 	}
 }
 
+func TestPauseProxySQLNoopWithoutConn(t *testing.T) {
+	t.Parallel()
+
+	proxy := &ProxySQL{
+		conn:          nil,
+		settings:      newTestConfig(),
+		shutdownPhase: PhaseDraining,
+		shutdownMu:    sync.RWMutex{},
+	}
+
+	proxy.pauseProxySQL(context.Background()) // must not panic
+}
+
 func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
 	// gracefulShutdown must NOT exit early when clients == 0.
 	// With 64 pods, any given pod frequently has zero active queries at T=2s.
-	// Exiting early means PROXYSQL SHUTDOWN SLOW fires before kube-proxy removes
+	// Exiting early means PROXYSQL SHUTDOWN fires before kube-proxy removes
 	// the endpoint (~15-20s), so new connections get RST'd during TCP/SSL handshake.
 	t.Parallel()
 
