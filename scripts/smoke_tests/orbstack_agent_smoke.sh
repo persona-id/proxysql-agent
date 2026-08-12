@@ -4,6 +4,18 @@
 # Deploys a core/satellite ProxySQL topology matching persona-kubernetes
 # proxysql-stack, with the locally-built agent image as the sidecar.
 #
+# Assertions:
+#   - agent health endpoints (/healthz/{started,ready,live})
+#   - core membership (pod IPs in proxysql_servers)
+#   - satellite sync of runtime_mysql_servers from cores
+#   - MySQL traffic through the proxysql service
+#   - core membership heals after deleting a core pod
+#   - NEW CONFIG SURVIVES CORE ROLLING UPDATE: re-render ConfigMap with a new
+#     mysql_query_rules marker, rollout-restart cores (maxSurge=1 so old+new
+#     coexist), delete a core mid-rollout to fire membership handlers, then
+#     assert every core+satellite carries the new marker and none revert to
+#     the old one. This is the production "had to kill all core pods" bug.
+#
 # Usage (from repo root):
 #   ./scripts/smoke_tests/orbstack_agent_smoke.sh
 #
@@ -17,10 +29,12 @@
 #   SMOKE_MYSQL_USER            ProxySQL mysql_users primary username (default: smoke)
 #   SMOKE_MYSQL_REPLICA_USER    ProxySQL mysql_users replica username (default: smoke-replica)
 #   SMOKE_MYSQL_PASSWORD        MySQL user password (default: smoke)
-#   SMOKE_CORE_REPLICAS         Core deployment replicas (default: 2)
+#   SMOKE_CORE_REPLICAS         Core deployment replicas (default: 2; rollout phase needs >= 2)
 #   SMOKE_SATELLITE_REPLICAS    Satellite deployment replicas (default: 2)
 #   SMOKE_SKIP_BUILD            If 1, skip docker build of proxysql-agent:smoke (default: 0)
 #   SMOKE_AGENT_IMAGE           Agent image tag (default: proxysql-agent:smoke)
+#   SMOKE_CONFIG_MARKER         Fingerprint comment in core mysql_query_rules (default: smoke-baseline)
+#   SMOKE_SKIP_CONFIG_ROLLOUT   If 1, skip the rolling-config-revert assertion (default: 0)
 #
 # Prerequisites:
 #   - OrbStack installed with Kubernetes enabled (`orb start k8s`)
@@ -47,6 +61,7 @@ readonly SMOKE_SKIP_BUILD="${SMOKE_SKIP_BUILD:-0}"
 readonly SMOKE_AGENT_IMAGE="${SMOKE_AGENT_IMAGE:-proxysql-agent:smoke}"
 readonly SMOKE_CORE_REPLICAS="${SMOKE_CORE_REPLICAS:-2}"
 readonly SMOKE_SATELLITE_REPLICAS="${SMOKE_SATELLITE_REPLICAS:-2}"
+readonly SMOKE_SKIP_CONFIG_ROLLOUT="${SMOKE_SKIP_CONFIG_ROLLOUT:-0}"
 
 # Defaults point at in-cluster MySQL. Override both hosts to skip deploying it.
 export SMOKE_MYSQL_PRIMARY_HOST="${SMOKE_MYSQL_PRIMARY_HOST:-mysql-primary.mysql.svc.cluster.local}"
@@ -56,6 +71,9 @@ export SMOKE_MYSQL_REPLICA_PORT="${SMOKE_MYSQL_REPLICA_PORT:-3306}"
 export SMOKE_MYSQL_USER="${SMOKE_MYSQL_USER:-smoke}"
 export SMOKE_MYSQL_REPLICA_USER="${SMOKE_MYSQL_REPLICA_USER:-smoke-replica}"
 export SMOKE_MYSQL_PASSWORD="${SMOKE_MYSQL_PASSWORD:-smoke}"
+# Fingerprint written into core mysql_query_rules.comment; re-rendered during the
+# rolling-config phase so we can detect stale-peer revert.
+export SMOKE_CONFIG_MARKER="${SMOKE_CONFIG_MARKER:-smoke-baseline}"
 
 readonly DEFAULT_PRIMARY_HOST="mysql-primary.mysql.svc.cluster.local"
 readonly DEFAULT_REPLICA_HOST="mysql-replica.mysql.svc.cluster.local"
@@ -185,6 +203,7 @@ render_proxysql_config() {
       -e "s|\${SMOKE_MYSQL_USER}|${SMOKE_MYSQL_USER}|g" \
       -e "s|\${SMOKE_MYSQL_REPLICA_USER}|${SMOKE_MYSQL_REPLICA_USER}|g" \
       -e "s|\${SMOKE_MYSQL_PASSWORD}|${SMOKE_MYSQL_PASSWORD}|g" \
+      -e "s|\${SMOKE_CONFIG_MARKER}|${SMOKE_CONFIG_MARKER}|g" \
       "${TEMPLATE_DIR}/proxysql-core.cnf.tmpl" >"${core_cnf}"
     cp "${TEMPLATE_DIR}/proxysql-satellite.cnf.tmpl" "${satellite_cnf}"
   fi
@@ -432,6 +451,181 @@ assert_core_resync() {
   done
 }
 
+# Read the smoke fingerprint from a core/satellite pod's mysql_query_rules table.
+# Prefers runtime_ (what clustering syncs); falls back to disk table.
+config_marker_on_pod() {
+  local pod="$1"
+  local marker=""
+  marker="$(admin_query "${pod}" "SELECT comment FROM runtime_mysql_query_rules WHERE rule_id=9001" 2>/dev/null | tr -d '\r' | head -n1 || true)"
+  if [[ -z "${marker}" ]]; then
+    marker="$(admin_query "${pod}" "SELECT comment FROM mysql_query_rules WHERE rule_id=9001" 2>/dev/null | tr -d '\r' | head -n1 || true)"
+  fi
+  printf '%s' "${marker}"
+}
+
+running_core_pods() {
+  kubectl -n proxysql get pods -l 'app=proxysql,component=core' \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+}
+
+# Assert every currently-Running core carries expected_marker.
+# Returns 0 on full match, 1 if any core is still missing it (caller polls).
+# Logs each pod's marker so the transcript shows convergence / revert.
+assert_cores_have_marker() {
+  local expected_marker="$1"
+  local pod marker
+  local matched=0
+  local total=0
+  local unexpected=0
+
+  while IFS= read -r pod; do
+    [[ -z "${pod}" ]] && continue
+    total=$((total + 1))
+    marker="$(config_marker_on_pod "${pod}")"
+    log "core ${pod} config marker='${marker}' (want '${expected_marker}')"
+
+    if [[ "${marker}" == "${expected_marker}" ]]; then
+      matched=$((matched + 1))
+    else
+      unexpected=$((unexpected + 1))
+    fi
+  done < <(running_core_pods)
+
+  [[ "${total}" -gt 0 ]] || die "no running core pods while asserting marker '${expected_marker}'"
+  [[ "${matched}" -eq "${total}" ]] || return 1
+  return 0
+}
+
+wait_cores_have_marker() {
+  local expected_marker="$1"
+  local forbidden_marker="${2:-}"
+  local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+  local pod marker seen_new=0
+
+  while true; do
+    if assert_cores_have_marker "${expected_marker}"; then
+      # After convergence, ensure no core still carries the forbidden old marker.
+      if [[ -n "${forbidden_marker}" ]]; then
+        while IFS= read -r pod; do
+          [[ -z "${pod}" ]] && continue
+          marker="$(config_marker_on_pod "${pod}")"
+          if [[ "${marker}" == "${forbidden_marker}" ]]; then
+            die "config reverted on ${pod}: has forbidden marker '${forbidden_marker}' after all cores briefly held '${expected_marker}'"
+          fi
+        done < <(running_core_pods)
+      fi
+      return 0
+    fi
+
+    # True-revert signal: at least one core already had the new marker, then a
+    # later poll shows the forbidden old marker on a Running core.
+    if [[ -n "${forbidden_marker}" ]]; then
+      while IFS= read -r pod; do
+        [[ -z "${pod}" ]] && continue
+        marker="$(config_marker_on_pod "${pod}")"
+        if [[ "${marker}" == "${expected_marker}" ]]; then
+          seen_new=1
+        elif [[ "${seen_new}" -eq 1 && "${marker}" == "${forbidden_marker}" ]]; then
+          die "config reverted on ${pod}: had peers on '${expected_marker}' then this core shows '${forbidden_marker}' (stale peer re-stamp)"
+        fi
+      done < <(running_core_pods)
+    fi
+
+    if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+      die "timed out after ${SMOKE_TIMEOUT_SECONDS}s waiting for all cores to carry marker '${expected_marker}' (a stale peer may have re-stamped the old config; see marker logs above)"
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+}
+
+# Force the production failure mode: change core config, roll cores with
+# maxSurge=1 so old and new coexist, amplify membership churn mid-rollout, and
+# assert the new fingerprint sticks on every core (no stale-peer revert).
+assert_config_survives_rolling_update() {
+  if [[ "${SMOKE_SKIP_CONFIG_ROLLOUT}" == "1" ]]; then
+    step "skipping config-rollout assertion (SMOKE_SKIP_CONFIG_ROLLOUT=1)"
+    return
+  fi
+
+  step "assert new core config survives rolling update (no stale-peer revert)"
+  if [[ "${SMOKE_CORE_REPLICAS}" -lt 2 ]]; then
+    die "config-rollout smoke requires SMOKE_CORE_REPLICAS>=2 (got ${SMOKE_CORE_REPLICAS}); the revert only fires when an old core coexists with a new one"
+  fi
+
+  local old_marker new_marker
+  old_marker="${SMOKE_CONFIG_MARKER}"
+  new_marker="smoke-rollout-$(date +%s)"
+
+  # Make the "before" state false first: confirm baseline marker is present, then
+  # replace it. Passing because pods never had the old marker would be a tautology.
+  wait_cores_have_marker "${old_marker}"
+  pass "baseline config marker '${old_marker}' present on all cores before rollout"
+
+  log "rendering + applying new core ConfigMap with marker='${new_marker}'"
+  export SMOKE_CONFIG_MARKER="${new_marker}"
+  render_proxysql_config
+
+  # Tie the pod template to the marker so the rollout must replace every core
+  # (ConfigMap content alone does not change the pod template hash).
+  kubectl -n proxysql annotate deployment/proxysql-core \
+    "smoke.withpersona.com/config-marker=${new_marker}" --overwrite
+
+  # Rolling restart: maxSurge=1 / maxUnavailable=1 (deployment strategy) means a
+  # new-config pod boots alongside old-config peers — exactly the window where
+  # membership LOAD ... TO RUNTIME used to re-stamp stale epochs.
+  step "rolling restart proxysql-core to pick up new ConfigMap"
+  kubectl -n proxysql rollout restart deployment/proxysql-core
+
+  # Amplify membership churn while old + new coexist: deleting one core mid-
+  # rollout fires addPod/removePod handlers on every surviving core.
+  sleep 8
+  local victim
+  victim="$(first_pod core || true)"
+  if [[ -n "${victim}" ]]; then
+    log "deleting core pod ${victim} mid-rollout to force membership LOAD handlers"
+    kubectl -n proxysql delete pod "${victim}" --wait=false >/dev/null 2>&1 || true
+  else
+    log "warning: no core pod available mid-rollout to delete; continuing with rollout churn alone"
+  fi
+
+  step "waiting for core rollout to complete"
+  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+  kubectl -n proxysql scale deployment/proxysql-core --replicas="${SMOKE_CORE_REPLICAS}" >/dev/null
+  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+
+  # New marker must win on every core; seeing the old marker after rollout is the
+  # revert bug (would previously require kill-all cores to recover).
+  wait_cores_have_marker "${new_marker}" "${old_marker}"
+  pass "all cores kept new config marker '${new_marker}' through rolling update (old '${old_marker}' gone)"
+
+  # Satellites pull mysql_query_rules from cores — confirm the new marker landed
+  # on the data plane too, not just the control plane.
+  step "assert satellites pulled new config marker from cores"
+  local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+  local sat_pod sat_marker
+  while true; do
+    sat_pod="$(first_pod satellite)"
+    [[ -n "${sat_pod}" ]] || die "no running satellite after config rollout"
+    sat_marker="$(config_marker_on_pod "${sat_pod}")"
+    log "satellite ${sat_pod} config marker='${sat_marker}'"
+    if [[ "${sat_marker}" == "${new_marker}" ]]; then
+      pass "satellite synced new config marker '${new_marker}'"
+      break
+    fi
+    if [[ "${sat_marker}" == "${old_marker}" ]]; then
+      die "satellite ${sat_pod} still has old marker '${old_marker}' after cores rolled — cores may have republished stale config"
+    fi
+    if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+      die "timed out after ${SMOKE_TIMEOUT_SECONDS}s waiting for satellite to sync marker '${new_marker}' (got '${sat_marker}')"
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+
+  # Leave SMOKE_CONFIG_MARKER at the new value so later debugging matches runtime.
+  export SMOKE_CONFIG_MARKER="${new_marker}"
+}
+
 main() {
   cd "${REPO_ROOT}"
   preflight
@@ -445,6 +639,7 @@ main() {
   assert_satellite_sync
   assert_traffic
   assert_core_resync
+  assert_config_survives_rolling_update
   pass "orbstack proxysql-agent smoke test"
 }
 
