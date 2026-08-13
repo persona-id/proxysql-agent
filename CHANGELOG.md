@@ -2,6 +2,12 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## 1.2.2 - 08/13/2026
+
+- Core membership handlers (`addPodToCluster`, `removePodFromCluster`, `reconcileCluster`) now reload only `proxysql_servers` instead of the full `LOAD ... TO RUNTIME` suite. Reloading the `mysql_*`/admin/variables tables on a peer join/leave re-stamped the core's config checksum with a fresh epoch, so an old-config core reacting to membership churn during a rolling deploy republished its stale config as the newest and reverted freshly deployed cores — forcing a manual kill of all core pods to land config changes.
+- Core startup now reloads config with `LOAD ... FROM CONFIG` then `LOAD ... TO RUNTIME`. ProxySQL refuses to sync `mysql_servers`/`users`/`query_rules` from a peer still at cluster version 1 (so satellites never pulled after the membership-handler change). During `start_delay`, clustering can also overwrite a fresh core's in-memory tables with a stale peer's config — FROM CONFIG restores the configmap-mounted file before we stamp a fresh epoch so the new core wins.
+- OrbStack smoke suite asserts the new config marker survives a rolling core restart with mid-rollout membership deletes (the production revert window).
+
 ## 1.1.7 - 08/26/2025
 
 - Add catching SIGUSR1 and SIGUSR2; the former prints some stats to the log, the latter is NYI

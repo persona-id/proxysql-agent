@@ -31,17 +31,29 @@ import (
 //   - if it's the first core pod, it uses the podAdded callback to add itself to the proxysql_servers table
 //   - if other core pods are already running, one of them will use add the new pod via the podUpdated function
 //
-// When a new satellite pod joins the cluster, the core pods all run the "LOAD X TO RUNTIME" commands, which
-// accepts the new pod and distributes the configuration to it.
+// When a new satellite pod joins the cluster, the core pods reload proxysql_servers ("LOAD PROXYSQL SERVERS
+// TO RUNTIME"), which accepts the new pod; ProxySQL's own cluster sync then distributes the configuration to it.
 //
 // Leaving:
 //
 //   - When a satellite pod leaves the cluster, nothing needs to be done.
-//   - When a core pod leaves the cluster, the remaining core pods all delete that pod from the proxysql_servers
-//     table and run all of the LOAD X TO RUNTIME commands.
+//   - When a core pod leaves the cluster, the remaining core pods delete that pod from the proxysql_servers
+//     table and reload proxysql_servers only.
+//
+// Membership handlers reload proxysql_servers and nothing else — see loadServersToRuntime for why re-loading
+// the mysql_*/admin/variables config tables here would revert freshly deployed cores.
+//
+// At core startup the agent also reloads its own config from the mounted file (see stampOwnConfig):
+// ProxySQL will not sync mysql_servers/users/query_rules from a peer still at cluster version 1, and
+// during start_delay a peer may have already overwritten this core's in-memory tables — FROM CONFIG
+// restores the intended config before we stamp a fresh epoch.
 //
 // FIXME(kuzmik): core pods actually don't need to gracefully shutddown, so we can remove some of this code here.
 func (p *ProxySQL) Core(ctx context.Context) error {
+	if err := p.stampOwnConfig(ctx); err != nil {
+		return fmt.Errorf("failed to stamp own config at core startup: %w", err)
+	}
+
 	if p.clientset == nil {
 		config, err := rest.InClusterConfig()
 		if err != nil {
@@ -177,7 +189,61 @@ const (
 
 	// defaultReconcileInterval is used when the configured core.interval is zero or negative.
 	defaultReconcileInterval = 10 * time.Second
+
+	// loadServersToRuntime applies proxysql_servers (cluster membership) changes.
+	//
+	// Membership handlers deliberately reload ONLY proxysql_servers, never the
+	// mysql_*/admin/variables config tables. Reloading those recomputes their
+	// cluster checksum with a fresh epoch, so an old-config core reacting to a
+	// peer's join/leave during a rolling deploy republishes its stale config as
+	// the newest and reverts the freshly deployed cores. Config is loaded once,
+	// from the config file at boot, and distributed by ProxySQL's own cluster
+	// sync; membership churn must not re-stamp it.
+	loadServersToRuntime = "LOAD PROXYSQL SERVERS TO RUNTIME"
 )
+
+// ownConfigLoadCommands returns the LOAD FROM CONFIG / TO RUNTIME sequence that
+// re-reads this core's mounted config file into the in-memory tables and then
+// publishes them to runtime. LOAD FROM CONFIG is required: during the agent
+// start_delay window ProxySQL clustering may already have overwritten the
+// in-memory tables with a peer's stale config (and with save_to_disk, that
+// pollution sticks). Reloading from the configmap-mounted file restores this
+// pod's intended config; TO RUNTIME then bumps versions past 1 (so satellites
+// can sync) with a fresh epoch (so this core wins over older peers during a
+// rolling deploy).
+func ownConfigLoadCommands() []string {
+	return []string{
+		"LOAD ADMIN VARIABLES FROM CONFIG",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"LOAD MYSQL VARIABLES FROM CONFIG",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS FROM CONFIG",
+		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS FROM CONFIG",
+		"LOAD MYSQL USERS TO RUNTIME",
+		"LOAD MYSQL QUERY RULES FROM CONFIG",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+	}
+}
+
+// stampOwnConfig re-reads this core's configmap-mounted config file into
+// ProxySQL's tables and publishes them to runtime once at startup. That:
+//   - undoes any stale peer sync that landed during start_delay
+//   - bumps cluster versions past 1 so satellites are allowed to sync
+//   - gives this core a fresh epoch so its config wins over older peers
+//
+// It must NOT run from membership handlers — see loadServersToRuntime.
+func (p *ProxySQL) stampOwnConfig(ctx context.Context) error {
+	slog.Info("reloading own config from file into runtime (undo peer pollution, unlock satellite sync)")
+
+	for _, command := range ownConfigLoadCommands() {
+		if _, err := p.conn.ExecContext(ctx, command); err != nil {
+			return fmt.Errorf("failed to execute %q: %w", command, err)
+		}
+	}
+
+	return nil
+}
 
 // reconcileLoop performs an initial reconciliation with retries, then runs
 // reconcileCluster periodically at the given interval until the context is
@@ -434,19 +500,8 @@ func (p *ProxySQL) reconcileCluster(ctx context.Context) error {
 		}
 	}
 
-	commands := []string{
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	}
-
-	for _, cmd := range commands {
-		if _, err := p.conn.ExecContext(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to execute %q: %w", cmd, err)
-		}
+	if _, err := p.conn.ExecContext(ctx, loadServersToRuntime); err != nil {
+		return fmt.Errorf("failed to execute %q: %w", loadServersToRuntime, err)
 	}
 
 	return nil
@@ -508,14 +563,7 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 		commands = append(commands, fmt.Sprintf("INSERT INTO proxysql_servers VALUES (%q, %d, 0, %q)", pod.Status.PodIP, port, pod.Name))
 	}
 
-	commands = append(commands,
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	)
+	commands = append(commands, loadServersToRuntime)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {
@@ -536,8 +584,8 @@ func (p *ProxySQL) addPodToCluster(ctx context.Context, pod *v1.Pod) error {
 }
 
 // Remove a core pod from the cluster when it leaves. This function just deletes the pod from
-// proxysql_servers based on the hostname (PodIP here, technically). The function then runs all the
-// LOAD TO RUNTIME commands required to sync state to the rest of the cluster.
+// proxysql_servers based on the hostname (PodIP here, technically). The function then reloads
+// proxysql_servers to sync the membership change to the rest of the cluster.
 func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error {
 	if p.IsShuttingDown() {
 		slog.Debug("skipping remove pod from cluster: shutting down")
@@ -556,14 +604,7 @@ func (p *ProxySQL) removePodFromCluster(ctx context.Context, pod *v1.Pod) error 
 		commands = append(commands, fmt.Sprintf("DELETE FROM proxysql_servers WHERE hostname = %q", pod.Status.PodIP))
 	}
 
-	commands = append(commands,
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	)
+	commands = append(commands, loadServersToRuntime)
 
 	for _, command := range commands {
 		if p.IsShuttingDown() {

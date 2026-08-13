@@ -57,7 +57,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -71,7 +71,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -85,7 +85,7 @@ func TestPodUpdated(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 	}
@@ -284,7 +284,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -319,7 +319,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -361,7 +361,7 @@ func TestAddPodWhenReady(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -448,7 +448,7 @@ func TestAddPodToCluster(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -466,7 +466,7 @@ func TestAddPodToCluster(t *testing.T) {
 				mock.ExpectExec("DELETE FROM proxysql_servers WHERE hostname = 'proxysql-core'").
 					WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -541,7 +541,7 @@ func TestRemovePodFromCluster(t *testing.T) {
 					sqlmock.NewResult(0, 1),
 				)
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -556,7 +556,7 @@ func TestRemovePodFromCluster(t *testing.T) {
 			component: "satellite",
 			namespace: "default",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 			expectFunc: func(t *testing.T, err error) {
 				t.Helper()
@@ -664,7 +664,7 @@ func TestReconcileCluster(t *testing.T) {
 				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.3"`).
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -705,7 +705,7 @@ func TestReconcileCluster(t *testing.T) {
 				mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`).
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -805,7 +805,7 @@ func TestPodDeleted(t *testing.T) {
 					`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`,
 				).WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -819,7 +819,7 @@ func TestPodDeleted(t *testing.T) {
 				Status: v1.PodStatus{PodIP: "10.0.0.1"},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -845,7 +845,7 @@ func TestPodDeleted(t *testing.T) {
 					`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.1"`,
 				).WillReturnResult(sqlmock.NewResult(0, 1))
 
-				expectRuntimeLoads(mock)
+				expectServersLoad(mock)
 			},
 		},
 		{
@@ -912,7 +912,7 @@ func TestReconcileLoop(t *testing.T) {
 		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		expectRuntimeLoads(mock)
+		expectServersLoad(mock)
 
 		p := &ProxySQL{
 			clientset:     k8sfake.NewClientset(pod),
@@ -1068,7 +1068,7 @@ func TestReconcileLoop(t *testing.T) {
 		mock.ExpectExec(`DELETE FROM proxysql_servers WHERE hostname = "10.0.0.99"`).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		expectRuntimeLoads(mock)
+		expectServersLoad(mock)
 
 		p := &ProxySQL{
 			clientset:     k8sfake.NewClientset(pod),
@@ -1089,18 +1089,84 @@ func TestReconcileLoop(t *testing.T) {
 	})
 }
 
-// Helper function to set up common runtime load expectations.
-func expectRuntimeLoads(mock sqlmock.Sqlmock) {
-	for _, cmd := range []string{
-		"LOAD PROXYSQL SERVERS TO RUNTIME",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-		"LOAD MYSQL USERS TO RUNTIME",
-		"LOAD MYSQL QUERY RULES TO RUNTIME",
-	} {
-		mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
+func TestStampOwnConfig(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		setupMock  func(mock sqlmock.Sqlmock)
+		expectFunc func(t *testing.T, err error)
+	}{
+		{
+			name: "reloads own config from file then to runtime",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				for _, cmd := range ownConfigLoadCommands() {
+					mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+			},
+			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			},
+		},
+		{
+			name: "returns error when a load fails",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("LOAD ADMIN VARIABLES FROM CONFIG").WillReturnError(errSQLTest)
+			},
+			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
+				if err == nil {
+					t.Errorf("expected error, got nil")
+
+					return
+				}
+
+				if !strings.Contains(err.Error(), "SQL error") || !strings.Contains(err.Error(), "LOAD ADMIN VARIABLES FROM CONFIG") {
+					t.Errorf("expected error to mention command and SQL error, got %v", err)
+				}
+			},
+		},
 	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Failed to create mock database connection: %v", err)
+			}
+			defer db.Close()
+
+			mock.MatchExpectationsInOrder(true)
+
+			p := &ProxySQL{
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownPhase: PhaseRunning,
+			}
+
+			tc.setupMock(mock)
+
+			err = p.stampOwnConfig(context.Background())
+			tc.expectFunc(t, err)
+
+			if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+				t.Errorf("Unfulfilled expectations: %s", mockErr)
+			}
+		})
+	}
+}
+
+// Helper function to set up the membership-reload expectation. Membership handlers
+// reload only proxysql_servers — see loadServersToRuntime in core.go for why.
+func expectServersLoad(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("LOAD PROXYSQL SERVERS TO RUNTIME").WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 // Helper function to set up common test infrastructure for pod operations.

@@ -109,5 +109,14 @@ proxysql_servers = (
   }
 )
 
+# Marker rule used by the config-rollout smoke phase. apply=0 so it never
+# affects traffic; the comment is the fingerprint we assert across cores.
 mysql_query_rules = (
+  {
+    rule_id         = 9001
+    active          = 1
+    match_pattern   = "."
+    apply           = 0
+    comment         = "${SMOKE_CONFIG_MARKER}"
+  },
 )
