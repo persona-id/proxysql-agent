@@ -15,6 +15,8 @@
 #     coexist), delete a core mid-rollout to fire membership handlers, then
 #     assert every core+satellite carries the new marker and none revert to
 #     the old one. This is the production "had to kill all core pods" bug.
+#   - satellite graceful drain: preStop → PROXYSQL PAUSE, new connects to the
+#     paused pod are refused, service traffic survives via remaining peers
 #
 # Usage (from repo root):
 #   ./scripts/smoke_tests/orbstack_agent_smoke.sh
@@ -626,6 +628,86 @@ assert_config_survives_rolling_update() {
   export SMOKE_CONFIG_MARKER="${new_marker}"
 }
 
+assert_graceful_drain() {
+  step "assert satellite preStop issues PROXYSQL PAUSE before shutdown"
+  if [[ "${SMOKE_SATELLITE_REPLICAS}" -lt 2 ]]; then
+    die "assert_graceful_drain requires SMOKE_SATELLITE_REPLICAS >= 2 (got ${SMOKE_SATELLITE_REPLICAS})"
+  fi
+
+  local victim victim_ip deadline logs
+  victim="$(first_pod satellite)"
+  [[ -n "${victim}" ]] || die "no running satellite pod for graceful drain check"
+  victim_ip="$(kubectl -n proxysql get pod "${victim}" -o jsonpath='{.status.podIP}')"
+  [[ -n "${victim_ip}" ]] || die "could not resolve pod IP for ${victim}"
+
+  log "deleting satellite ${victim} (ip=${victim_ip}) to trigger preStop /shutdown"
+
+  # --wait=false so we can observe agent logs while the pod is still Terminating.
+  kubectl -n proxysql delete pod "${victim}" --wait=false
+
+  deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+  local pause_seen=0
+  while true; do
+    logs="$(kubectl -n proxysql logs "${victim}" -c proxysql-agent --tail=200 2>/dev/null || true)"
+
+    if echo "${logs}" | grep -q "failed to pause ProxySQL"; then
+      die "agent failed to PROXYSQL PAUSE on ${victim}: $(echo "${logs}" | grep "failed to pause ProxySQL" | tail -n1)"
+    fi
+
+    if echo "${logs}" | grep -q "ProxySQL pause completed"; then
+      pause_seen=1
+      pass "agent issued PROXYSQL PAUSE on ${victim} before shutdown"
+      break
+    fi
+
+    # Pod fully gone without a pause log means the new drain path did not run.
+    if ! kubectl -n proxysql get pod "${victim}" >/dev/null 2>&1; then
+      die "satellite ${victim} exited before agent logged ProxySQL pause completed"
+    fi
+
+    if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+      die "timed out after ${SMOKE_TIMEOUT_SECONDS}s waiting for ProxySQL pause completed on ${victim}"
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+  [[ "${pause_seen}" -eq 1 ]] || die "PAUSE was not observed"
+
+  # While the victim is still Terminating (listener paused), new connects to its
+  # pod IP:6033 must fail. Surviving satellites keep serving via the Service.
+  if kubectl -n proxysql get pod "${victim}" >/dev/null 2>&1; then
+    local connect_rc=0
+    kubectl -n proxysql run "smoke-pause-probe-${RANDOM}" --rm -i --restart=Never \
+      --image=mysql:8.0.36 \
+      --command -- \
+      mysql -h"${victim_ip}" -P6033 \
+        -u"${SMOKE_MYSQL_USER}" -p"${SMOKE_MYSQL_PASSWORD}" \
+        --connect-timeout=3 -N -B -e 'SELECT 1' >/dev/null 2>&1 \
+      || connect_rc=$?
+    if [[ "${connect_rc}" -eq 0 ]]; then
+      die "new connect to paused satellite ${victim} (${victim_ip}:6033) unexpectedly succeeded"
+    fi
+    pass "new connects to paused satellite ${victim_ip}:6033 are refused"
+  else
+    log "victim already gone after PAUSE; skipping pod-IP connect refuse check"
+  fi
+
+  # Service path must still work via the surviving satellite(s).
+  local result
+  result="$(
+    kubectl -n proxysql run "smoke-drain-traffic-${RANDOM}" --rm -i --restart=Never \
+      --image=mysql:8.0.36 \
+      --command -- \
+      mysql -hproxysql.proxysql.svc.cluster.local -P6033 \
+        -u"${SMOKE_MYSQL_USER}" -p"${SMOKE_MYSQL_PASSWORD}" \
+        -N -B -e 'SELECT 1' 2>/dev/null \
+      | tr -d '\r' | grep -E '^[0-9]+$' | tail -n1 || true
+  )"
+  [[ "${result}" == "1" ]] || die "service traffic failed during satellite drain: expected 1, got '${result}'"
+  pass "service traffic survived satellite graceful drain"
+
+  kubectl -n proxysql rollout status deployment/proxysql-satellite --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+}
+
 main() {
   cd "${REPO_ROOT}"
   preflight
@@ -640,6 +722,7 @@ main() {
   assert_traffic
   assert_core_resync
   assert_config_survives_rolling_update
+  assert_graceful_drain
   pass "orbstack proxysql-agent smoke test"
 }
 
