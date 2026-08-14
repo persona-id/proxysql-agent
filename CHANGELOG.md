@@ -2,6 +2,10 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## 1.2.3 - 08/14/2026
+
+- Satellite graceful shutdown now issues `PROXYSQL PAUSE` before the drain wait and `PROXYSQL SHUTDOWN`. Readiness 503 alone left sticky Rails pool sockets pinned to the dying pod until shutdown severed them mid-query (`Trilogy::EOFError` / `CLOSED_CONNECTION`). PAUSE stops the frontend listener and sets `mysql-wait_timeout=0` so idle clients close while healthy Service peers take new traffic; plain `SHUTDOWN` follows (no `SLOW`). OrbStack smoke asserts PAUSE runs and service traffic survives satellite drain.
+
 ## 1.2.2 - 08/13/2026
 
 - Core membership handlers (`addPodToCluster`, `removePodFromCluster`, `reconcileCluster`) now reload only `proxysql_servers` instead of the full `LOAD ... TO RUNTIME` suite. Reloading the `mysql_*`/admin/variables tables on a peer join/leave re-stamped the core's config checksum with a fresh epoch, so an old-config core reacting to membership churn during a rolling deploy republished its stale config as the newest and reverted freshly deployed cores — forcing a manual kill of all core pods to land config changes.
