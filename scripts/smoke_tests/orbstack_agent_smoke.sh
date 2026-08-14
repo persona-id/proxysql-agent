@@ -15,6 +15,11 @@
 #     coexist), delete a core mid-rollout to fire membership handlers, then
 #     assert every core+satellite carries the new marker and none revert to
 #     the old one. This is the production "had to kill all core pods" bug.
+#   - BACKEND REMOVAL SURVIVES CORE ROLLING UPDATE: drop the HG2 replica from
+#     the ConfigMap, roll cores the same way, then assert the removed host is
+#     gone from runtime_mysql_servers on every core+satellite (not merely
+#     SHUNNED). Catches ProxySQL's FROM CONFIG merge leaving peer-synced
+#     ghost backends when stampOwnConfig omits DELETE FROM mysql_servers.
 #
 # Usage (from repo root):
 #   ./scripts/smoke_tests/orbstack_agent_smoke.sh
@@ -35,6 +40,9 @@
 #   SMOKE_AGENT_IMAGE           Agent image tag (default: proxysql-agent:smoke)
 #   SMOKE_CONFIG_MARKER         Fingerprint comment in core mysql_query_rules (default: smoke-baseline)
 #   SMOKE_SKIP_CONFIG_ROLLOUT   If 1, skip the rolling-config-revert assertion (default: 0)
+#   SMOKE_INCLUDE_MYSQL_REPLICA If 0, omit the HG2 replica from core mysql_servers
+#                               when rendering (default: 1; set to 0 by the backend-
+#                               removal smoke phase)
 #
 # Prerequisites:
 #   - OrbStack installed with Kubernetes enabled (`orb start k8s`)
@@ -74,6 +82,8 @@ export SMOKE_MYSQL_PASSWORD="${SMOKE_MYSQL_PASSWORD:-smoke}"
 # Fingerprint written into core mysql_query_rules.comment; re-rendered during the
 # rolling-config phase so we can detect stale-peer revert.
 export SMOKE_CONFIG_MARKER="${SMOKE_CONFIG_MARKER:-smoke-baseline}"
+# When 0, render_proxysql_config strips the HG2 replica stanza from the core cnf.
+export SMOKE_INCLUDE_MYSQL_REPLICA="${SMOKE_INCLUDE_MYSQL_REPLICA:-1}"
 
 readonly DEFAULT_PRIMARY_HOST="mysql-primary.mysql.svc.cluster.local"
 readonly DEFAULT_REPLICA_HOST="mysql-replica.mysql.svc.cluster.local"
@@ -184,8 +194,20 @@ deploy_mysql() {
   kubectl -n mysql rollout status deployment/mysql-replica --timeout="${SMOKE_TIMEOUT_SECONDS}s"
 }
 
+# Drop the marked HG2 replica stanza from a rendered core cnf (in place).
+omit_replica_from_core_cnf() {
+  local core_cnf="$1"
+  # BSD/GNU sed: delete from the begin marker through the end marker inclusive.
+  sed -i.bak '/# SMOKE_REPLICA_BEGIN/,/# SMOKE_REPLICA_END/d' "${core_cnf}"
+  rm -f "${core_cnf}.bak"
+}
+
 render_proxysql_config() {
-  step "rendering ProxySQL ConfigMaps (primary=${SMOKE_MYSQL_PRIMARY_HOST} replica=${SMOKE_MYSQL_REPLICA_HOST})"
+  local replica_desc="${SMOKE_MYSQL_REPLICA_HOST}"
+  if [[ "${SMOKE_INCLUDE_MYSQL_REPLICA}" != "1" ]]; then
+    replica_desc="(omitted)"
+  fi
+  step "rendering ProxySQL ConfigMaps (primary=${SMOKE_MYSQL_PRIMARY_HOST} replica=${replica_desc})"
   local core_cnf="${RENDER_DIR}/proxysql-core.cnf"
   local satellite_cnf="${RENDER_DIR}/proxysql-satellite.cnf"
 
@@ -206,6 +228,12 @@ render_proxysql_config() {
       -e "s|\${SMOKE_CONFIG_MARKER}|${SMOKE_CONFIG_MARKER}|g" \
       "${TEMPLATE_DIR}/proxysql-core.cnf.tmpl" >"${core_cnf}"
     cp "${TEMPLATE_DIR}/proxysql-satellite.cnf.tmpl" "${satellite_cnf}"
+  fi
+
+  if [[ "${SMOKE_INCLUDE_MYSQL_REPLICA}" != "1" ]]; then
+    omit_replica_from_core_cnf "${core_cnf}"
+    grep -qF "${SMOKE_MYSQL_REPLICA_HOST}" "${core_cnf}" \
+      && die "SMOKE_INCLUDE_MYSQL_REPLICA=0 but replica host '${SMOKE_MYSQL_REPLICA_HOST}' still present in rendered core cnf"
   fi
 
   kubectl apply -f "${DEPLOY_DIR}/proxysql/namespace.yaml"
@@ -567,32 +595,11 @@ assert_config_survives_rolling_update() {
   render_proxysql_config
 
   # Tie the pod template to the marker so the rollout must replace every core
-  # (ConfigMap content alone does not change the pod template hash).
-  kubectl -n proxysql annotate deployment/proxysql-core \
-    "smoke.withpersona.com/config-marker=${new_marker}" --overwrite
-
-  # Rolling restart: maxSurge=1 / maxUnavailable=1 (deployment strategy) means a
-  # new-config pod boots alongside old-config peers — exactly the window where
-  # membership LOAD ... TO RUNTIME used to re-stamp stale epochs.
-  step "rolling restart proxysql-core to pick up new ConfigMap"
-  kubectl -n proxysql rollout restart deployment/proxysql-core
-
-  # Amplify membership churn while old + new coexist: deleting one core mid-
-  # rollout fires addPod/removePod handlers on every surviving core.
-  sleep 8
-  local victim
-  victim="$(first_pod core || true)"
-  if [[ -n "${victim}" ]]; then
-    log "deleting core pod ${victim} mid-rollout to force membership LOAD handlers"
-    kubectl -n proxysql delete pod "${victim}" --wait=false >/dev/null 2>&1 || true
-  else
-    log "warning: no core pod available mid-rollout to delete; continuing with rollout churn alone"
-  fi
-
-  step "waiting for core rollout to complete"
-  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
-  kubectl -n proxysql scale deployment/proxysql-core --replicas="${SMOKE_CORE_REPLICAS}" >/dev/null
-  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+  # (ConfigMap content alone does not change the pod template hash). Rolling
+  # restart with maxSurge=1 means a new-config pod boots alongside old-config
+  # peers — exactly the window where membership LOAD used to re-stamp stale
+  # epochs; mid-rollout delete amplifies that churn.
+  roll_cores_with_membership_churn "${new_marker}"
 
   # New marker must win on every core; seeing the old marker after rollout is the
   # revert bug (would previously require kill-all cores to recover).
@@ -626,6 +633,142 @@ assert_config_survives_rolling_update() {
   export SMOKE_CONFIG_MARKER="${new_marker}"
 }
 
+# Count rows for hostname in hostgroup on a pod's runtime_mysql_servers.
+# Asserts presence/absence of a specific backend — status alone is not enough
+# (a ghost host can sit SHUNNED after certs/connectivity fail).
+backend_hg_count_on_pod() {
+  local pod="$1"
+  local hostname="$2"
+  local hostgroup_id="$3"
+  admin_query "${pod}" \
+    "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostname='${hostname}' AND hostgroup_id=${hostgroup_id}" \
+    2>/dev/null | tr -d '\r' | head -n1 || echo 0
+}
+
+running_satellite_pods() {
+  kubectl -n proxysql get pods -l 'app=proxysql,component=satellite' \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+}
+
+# Returns 0 when every Running pod of the given component has the expected
+# COUNT for hostname@hostgroup. Logs each pod so the transcript shows ghosts.
+assert_pods_backend_hg_count() {
+  local component="$1"
+  local hostname="$2"
+  local hostgroup_id="$3"
+  local expected_count="$4"
+  local pod count
+  local matched=0
+  local total=0
+
+  local pods
+  if [[ "${component}" == "core" ]]; then
+    pods="$(running_core_pods)"
+  else
+    pods="$(running_satellite_pods)"
+  fi
+
+  while IFS= read -r pod; do
+    [[ -z "${pod}" ]] && continue
+    total=$((total + 1))
+    count="$(backend_hg_count_on_pod "${pod}" "${hostname}" "${hostgroup_id}")"
+    log "${component} ${pod} runtime_mysql_servers hostname=${hostname} hg=${hostgroup_id} count=${count} (want ${expected_count})"
+    if [[ "${count}" == "${expected_count}" ]]; then
+      matched=$((matched + 1))
+    fi
+  done <<<"${pods}"
+
+  [[ "${total}" -gt 0 ]] || die "no running ${component} pods while asserting ${hostname}@hg${hostgroup_id}"
+  [[ "${matched}" -eq "${total}" ]] || return 1
+  return 0
+}
+
+wait_pods_backend_hg_count() {
+  local component="$1"
+  local hostname="$2"
+  local hostgroup_id="$3"
+  local expected_count="$4"
+  local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+
+  while true; do
+    if assert_pods_backend_hg_count "${component}" "${hostname}" "${hostgroup_id}" "${expected_count}"; then
+      return 0
+    fi
+    if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+      die "timed out after ${SMOKE_TIMEOUT_SECONDS}s waiting for all ${component}s to have ${hostname}@hg${hostgroup_id} count=${expected_count} (ghost host from FROM CONFIG merge without DELETE?)"
+    fi
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+}
+
+# Shared mid-rollout membership churn used by both config-stickiness phases.
+roll_cores_with_membership_churn() {
+  local annotation_value="$1"
+
+  kubectl -n proxysql annotate deployment/proxysql-core \
+    "smoke.withpersona.com/config-marker=${annotation_value}" --overwrite
+
+  step "rolling restart proxysql-core to pick up new ConfigMap"
+  kubectl -n proxysql rollout restart deployment/proxysql-core
+
+  sleep 8
+  local victim
+  victim="$(first_pod core || true)"
+  if [[ -n "${victim}" ]]; then
+    log "deleting core pod ${victim} mid-rollout to force membership LOAD handlers"
+    kubectl -n proxysql delete pod "${victim}" --wait=false >/dev/null 2>&1 || true
+  else
+    log "warning: no core pod available mid-rollout to delete; continuing with rollout churn alone"
+  fi
+
+  step "waiting for core rollout to complete"
+  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+  kubectl -n proxysql scale deployment/proxysql-core --replicas="${SMOKE_CORE_REPLICAS}" >/dev/null
+  kubectl -n proxysql rollout status deployment/proxysql-core --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+}
+
+# Force the stack-0015 failure mode: remove an HG2 backend from the ConfigMap,
+# roll cores while old (still advertising the host) and new coexist, and assert
+# the removed host is gone from runtime_mysql_servers — not merely SHUNNED.
+# Without DELETE FROM mysql_servers before FROM CONFIG, peer sync re-injects
+# the host and the merge reload leaves it forever.
+assert_backend_removal_survives_rolling_update() {
+  if [[ "${SMOKE_SKIP_CONFIG_ROLLOUT}" == "1" ]]; then
+    step "skipping backend-removal assertion (SMOKE_SKIP_CONFIG_ROLLOUT=1)"
+    return
+  fi
+
+  step "assert removed backend stays gone after rolling update (no FROM CONFIG merge ghost)"
+  if [[ "${SMOKE_CORE_REPLICAS}" -lt 2 ]]; then
+    die "backend-removal smoke requires SMOKE_CORE_REPLICAS>=2 (got ${SMOKE_CORE_REPLICAS}); the ghost only lands when an old core coexists with a new one"
+  fi
+
+  local removed_host="${SMOKE_MYSQL_REPLICA_HOST}"
+  local primary_host="${SMOKE_MYSQL_PRIMARY_HOST}"
+
+  # Assert false first: replica must be present in HG2 before we remove it.
+  wait_pods_backend_hg_count core "${removed_host}" 2 1
+  pass "replica ${removed_host} present in HG2 on all cores before removal"
+
+  log "rendering + applying core ConfigMap with HG2 replica omitted"
+  export SMOKE_INCLUDE_MYSQL_REPLICA=0
+  render_proxysql_config
+
+  roll_cores_with_membership_churn "backend-removal-$(date +%s)"
+
+  # Gone means count=0 in runtime — SHUNNED still counts as present and is a fail.
+  wait_pods_backend_hg_count core "${removed_host}" 2 0
+  pass "all cores dropped ${removed_host} from HG2 runtime_mysql_servers"
+
+  wait_pods_backend_hg_count core "${primary_host}" 1 1
+  pass "primary ${primary_host} still present in HG1 on all cores"
+
+  step "assert satellites dropped removed backend from HG2"
+  wait_pods_backend_hg_count satellite "${removed_host}" 2 0
+  pass "all satellites dropped ${removed_host} from HG2 runtime_mysql_servers"
+}
+
 main() {
   cd "${REPO_ROOT}"
   preflight
@@ -640,6 +783,7 @@ main() {
   assert_traffic
   assert_core_resync
   assert_config_survives_rolling_update
+  assert_backend_removal_survives_rolling_update
   pass "orbstack proxysql-agent smoke test"
 }
 

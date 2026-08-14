@@ -211,12 +211,22 @@ const (
 // pod's intended config; TO RUNTIME then bumps versions past 1 (so satellites
 // can sync) with a fresh epoch (so this core wins over older peers during a
 // rolling deploy).
+//
+// DELETE FROM mysql_servers precedes LOAD MYSQL SERVERS FROM CONFIG because
+// FROM CONFIG merges the config file into the existing table — it never
+// removes hosts that are absent from the file. During a rolling deploy a
+// not-yet-rolled peer can sync a removed backend back onto a fresh core
+// (save_to_disk), and a plain FROM CONFIG then leaves that ghost host in
+// place. DELETE makes the mounted config authoritative for the server list,
+// matching the satellite path's DELETE FROM proxysql_servers before
+// LOAD PROXYSQL SERVERS FROM CONFIG.
 func ownConfigLoadCommands() []string {
 	return []string{
 		"LOAD ADMIN VARIABLES FROM CONFIG",
 		"LOAD ADMIN VARIABLES TO RUNTIME",
 		"LOAD MYSQL VARIABLES FROM CONFIG",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"DELETE FROM mysql_servers",
 		"LOAD MYSQL SERVERS FROM CONFIG",
 		"LOAD MYSQL SERVERS TO RUNTIME",
 		"LOAD MYSQL USERS FROM CONFIG",
