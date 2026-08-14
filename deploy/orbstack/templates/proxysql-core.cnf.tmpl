@@ -69,6 +69,7 @@ mysql_servers = (
     compression       = 0
     use_ssl           = 0
   },
+  # SMOKE_REPLICA_BEGIN — stripped when SMOKE_INCLUDE_MYSQL_REPLICA=0
   {
     address           = "${SMOKE_MYSQL_REPLICA_HOST}"
     port              = ${SMOKE_MYSQL_REPLICA_PORT}
@@ -77,6 +78,7 @@ mysql_servers = (
     compression       = 0
     use_ssl           = 0
   },
+  # SMOKE_REPLICA_END
 )
 
 mysql_users = (

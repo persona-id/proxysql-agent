@@ -2,6 +2,11 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## 1.2.3 - 08/14/2026
+
+- Core startup `stampOwnConfig` now runs `DELETE FROM mysql_servers` before `LOAD MYSQL SERVERS FROM CONFIG`. ProxySQL's FROM CONFIG path merges the config file into the existing table and never deletes hosts that are absent from the file, so a backend removed from the ConfigMap could survive a rolling core update when a not-yet-rolled peer re-synced it (with `save_to_disk`) onto a fresh core. Observed on stack-0015 after removing a read replica: every new core briefly loaded the correct one-replica checksum, then accepted a peer sync that restored the removed host, and the subsequent FROM CONFIG reload left it in place (SHUNNED only when certs were also dropped). DELETE makes the mounted config authoritative for the server list, matching the satellite `DELETE FROM proxysql_servers` pattern.
+- OrbStack smoke suite adds a backend-removal rolling-update phase: omit the HG2 replica from the ConfigMap, roll cores with mid-rollout membership churn, and assert the host is gone from `runtime_mysql_servers` on every core and satellite (not merely SHUNNED).
+
 ## 1.2.2 - 08/13/2026
 
 - Core membership handlers (`addPodToCluster`, `removePodFromCluster`, `reconcileCluster`) now reload only `proxysql_servers` instead of the full `LOAD ... TO RUNTIME` suite. Reloading the `mysql_*`/admin/variables tables on a peer join/leave re-stamped the core's config checksum with a fresh epoch, so an old-config core reacting to membership churn during a rolling deploy republished its stale config as the newest and reverted freshly deployed cores — forcing a manual kill of all core pods to land config changes.

@@ -1089,6 +1089,35 @@ func TestReconcileLoop(t *testing.T) {
 	})
 }
 
+func TestOwnConfigLoadCommands(t *testing.T) {
+	t.Parallel()
+
+	commands := ownConfigLoadCommands()
+
+	deleteIdx, loadServersIdx := -1, -1
+
+	for i, cmd := range commands {
+		switch cmd {
+		case "DELETE FROM mysql_servers":
+			deleteIdx = i
+		case "LOAD MYSQL SERVERS FROM CONFIG":
+			loadServersIdx = i
+		}
+	}
+
+	if deleteIdx < 0 {
+		t.Fatal("expected DELETE FROM mysql_servers in ownConfigLoadCommands")
+	}
+
+	if loadServersIdx < 0 {
+		t.Fatal("expected LOAD MYSQL SERVERS FROM CONFIG in ownConfigLoadCommands")
+	}
+
+	if deleteIdx != loadServersIdx-1 {
+		t.Errorf("DELETE FROM mysql_servers must immediately precede LOAD MYSQL SERVERS FROM CONFIG; got delete at %d, load at %d", deleteIdx, loadServersIdx)
+	}
+}
+
 func TestStampOwnConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1128,6 +1157,33 @@ func TestStampOwnConfig(t *testing.T) {
 
 				if !strings.Contains(err.Error(), "SQL error") || !strings.Contains(err.Error(), "LOAD ADMIN VARIABLES FROM CONFIG") {
 					t.Errorf("expected error to mention command and SQL error, got %v", err)
+				}
+			},
+		},
+		{
+			name: "returns error when delete of mysql_servers fails",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				for _, cmd := range ownConfigLoadCommands() {
+					if cmd == "DELETE FROM mysql_servers" {
+						mock.ExpectExec(cmd).WillReturnError(errSQLTest)
+
+						return
+					}
+
+					mock.ExpectExec(cmd).WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+			},
+			expectFunc: func(t *testing.T, err error) {
+				t.Helper()
+
+				if err == nil {
+					t.Errorf("expected error, got nil")
+
+					return
+				}
+
+				if !strings.Contains(err.Error(), "SQL error") || !strings.Contains(err.Error(), "DELETE FROM mysql_servers") {
+					t.Errorf("expected error to mention DELETE FROM mysql_servers and SQL error, got %v", err)
 				}
 			},
 		},
