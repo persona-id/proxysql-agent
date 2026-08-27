@@ -44,16 +44,17 @@ func (p ShutdownPhase) String() string {
 }
 
 type ProxySQL struct {
-	clientset         kubernetes.Interface
-	conn              *sql.DB
-	settings          *configuration.Config
-	shutdownOnce      sync.Once
-	shutdownPhase     ShutdownPhase
-	shutdownMu        sync.RWMutex
-	httpServer        *http.Server
-	retryDelay        time.Duration  // delay between podAdded retries; defaults to podAddedRetryDelay
-	drainTickInterval time.Duration  // interval for drain polling; 0 means use 2s default
-	podWg             sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
+	clientset          kubernetes.Interface
+	conn               *sql.DB
+	settings           *configuration.Config
+	shutdownOnce       sync.Once
+	shutdownPhase      ShutdownPhase
+	shutdownMu         sync.RWMutex
+	httpServer         *http.Server
+	retryDelay         time.Duration  // delay between podAdded retries; defaults to podAddedRetryDelay
+	drainTickInterval  time.Duration  // interval for drain polling; 0 means use 2s default
+	pauseDelayOverride time.Duration  // test override for pause delay; 0 means use config seconds
+	podWg              sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
 }
 
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {

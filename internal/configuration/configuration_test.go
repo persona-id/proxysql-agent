@@ -65,6 +65,16 @@ func TestValidations(t *testing.T) {
 			wantErr: ErrNegativeSatelliteInterval,
 			args:    []string{"cmd", "--satellite.interval=-1"},
 		},
+		{
+			name:    "negative pause_delay",
+			wantErr: ErrNegativePauseDelay,
+			args:    []string{"cmd", "--shutdown.pause_delay=-1"},
+		},
+		{
+			name:    "shutdown_timeout not greater than pause_delay + drain_timeout",
+			wantErr: ErrShutdownTimeoutTooShort,
+			args:    []string{"cmd", "--shutdown.pause_delay=20", "--shutdown.drain_timeout=60", "--shutdown.shutdown_timeout=75"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -123,6 +133,9 @@ func TestDefaults(t *testing.T) {
 		{"Core.PodSelector.App", "proxysql", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "core", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 10, config.Satellite.Interval},
+		{"Shutdown.PauseDelay", 20, config.Shutdown.PauseDelay},
+		{"Shutdown.DrainTimeout", 30, config.Shutdown.DrainTimeout},
+		{"Shutdown.ShutdownTimeout", 100, config.Shutdown.ShutdownTimeout},
 	}
 
 	for _, tt := range tests {
@@ -282,6 +295,7 @@ func TestFlags(t *testing.T) {
 		"--core.podselector.component=notcore",
 		"--satellite.interval=5533",
 		"--shutdown.drain_timeout=45",
+		"--shutdown.pause_delay=15",
 		"--shutdown.shutdown_timeout=80",
 		"--shutdown.draining_file=/tmp/test-draining",
 	}
@@ -318,6 +332,7 @@ func TestFlags(t *testing.T) {
 		{"Core.PodSelector.Component", "notcore", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 5533, config.Satellite.Interval},
 		{"Shutdown.DrainTimeout", 45, config.Shutdown.DrainTimeout},
+		{"Shutdown.PauseDelay", 15, config.Shutdown.PauseDelay},
 		{"Shutdown.ShutdownTimeout", 80, config.Shutdown.ShutdownTimeout},
 		{"Shutdown.DrainingFile", "/tmp/test-draining", config.Shutdown.DrainingFile},
 	}
@@ -678,6 +693,14 @@ func TestConfigureAPIDefaults(t *testing.T) {
 	if config.Shutdown.DrainingFile != "/var/lib/proxysql/draining" {
 		t.Errorf("Shutdown.DrainingFile = %v, want /var/lib/proxysql/draining", config.Shutdown.DrainingFile)
 	}
+
+	if config.Shutdown.PauseDelay != 20 {
+		t.Errorf("Shutdown.PauseDelay = %v, want 20", config.Shutdown.PauseDelay)
+	}
+
+	if config.Shutdown.ShutdownTimeout != 100 {
+		t.Errorf("Shutdown.ShutdownTimeout = %v, want 100", config.Shutdown.ShutdownTimeout)
+	}
 }
 
 func TestLogDebugInfo(t *testing.T) {
@@ -728,10 +751,12 @@ func TestLogDebugInfo(t *testing.T) {
 		Shutdown: struct {
 			DrainingFile    string `mapstructure:"draining_file"`
 			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			PauseDelay      int    `mapstructure:"pause_delay"`
 			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,
+			PauseDelay:      20,
 			ShutdownTimeout: 60,
 		},
 	}

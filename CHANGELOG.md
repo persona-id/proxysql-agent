@@ -2,6 +2,10 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## 1.2.4 - 08/27/2026
+
+- Satellite graceful shutdown waits `shutdown.pause_delay` (default 20s) after readiness 503 before `PROXYSQL PAUSE`. kube-proxy can take ~15-25s to drop the pod from Service endpoints; pausing immediately refused/RESET new connects that still landed on the dying pod. `shutdown.shutdown_timeout` must exceed `pause_delay + drain_timeout` (config.yaml is now 100).
+
 ## 1.2.3 - 08/14/2026
 
 - Satellite graceful shutdown now issues `PROXYSQL PAUSE` before the drain wait and `PROXYSQL SHUTDOWN`. Readiness 503 alone left sticky Rails pool sockets pinned to the dying pod until shutdown severed them mid-query (`Trilogy::EOFError` / `CLOSED_CONNECTION`). PAUSE stops the frontend listener and sets `mysql-wait_timeout=0` so idle clients close while healthy Service peers take new traffic; plain `SHUTDOWN` follows (no `SLOW`). OrbStack smoke asserts PAUSE runs and service traffic survives satellite drain.

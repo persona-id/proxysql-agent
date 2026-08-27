@@ -50,6 +50,7 @@ func TestStartAPIServerConfiguration(t *testing.T) {
 				Shutdown: struct {
 					DrainingFile    string `mapstructure:"draining_file"`
 					DrainTimeout    int    `mapstructure:"drain_timeout"`
+					PauseDelay      int    `mapstructure:"pause_delay"`
 					ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 				}{
 					DrainingFile:    "/tmp/draining",
@@ -114,6 +115,7 @@ func TestRouteRegistration(t *testing.T) {
 		Shutdown: struct {
 			DrainingFile    string `mapstructure:"draining_file"`
 			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			PauseDelay      int    `mapstructure:"pause_delay"`
 			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
@@ -198,6 +200,7 @@ func TestStartAPIPortFormatting(t *testing.T) {
 				Shutdown: struct {
 					DrainingFile    string `mapstructure:"draining_file"`
 					DrainTimeout    int    `mapstructure:"drain_timeout"`
+					PauseDelay      int    `mapstructure:"pause_delay"`
 					ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 				}{
 					DrainingFile:    "/tmp/draining",
@@ -232,6 +235,7 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 		Shutdown: struct {
 			DrainingFile    string `mapstructure:"draining_file"`
 			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			PauseDelay      int    `mapstructure:"pause_delay"`
 			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
@@ -282,6 +286,7 @@ func TestStartAPIGoroutineStarted(t *testing.T) {
 		Shutdown: struct {
 			DrainingFile    string `mapstructure:"draining_file"`
 			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			PauseDelay      int    `mapstructure:"pause_delay"`
 			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
@@ -317,6 +322,7 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 		Shutdown: struct {
 			DrainingFile    string `mapstructure:"draining_file"`
 			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			PauseDelay      int    `mapstructure:"pause_delay"`
 			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",

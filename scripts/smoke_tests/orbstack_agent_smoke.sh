@@ -646,9 +646,13 @@ assert_graceful_drain() {
   kubectl -n proxysql delete pod "${victim}" --wait=false
 
   deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
-  local pause_seen=0
+  local pause_seen=0 delay_seen=0
   while true; do
     logs="$(kubectl -n proxysql logs "${victim}" -c proxysql-agent --tail=200 2>/dev/null || true)"
+
+    if echo "${logs}" | grep -q "waiting for endpoint propagation"; then
+      delay_seen=1
+    fi
 
     if echo "${logs}" | grep -q "failed to pause ProxySQL"; then
       die "agent failed to PROXYSQL PAUSE on ${victim}: $(echo "${logs}" | grep "failed to pause ProxySQL" | tail -n1)"
@@ -671,6 +675,7 @@ assert_graceful_drain() {
     sleep "${POLL_INTERVAL_SECONDS}"
   done
   [[ "${pause_seen}" -eq 1 ]] || die "PAUSE was not observed"
+  [[ "${delay_seen}" -eq 1 ]] || die "agent did not log waiting for endpoint propagation before PAUSE"
 
   # While the victim is still Terminating (listener paused), new connects to its
   # pod IP:6033 must fail. Surviving satellites keep serving via the Service.

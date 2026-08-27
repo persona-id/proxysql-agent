@@ -313,7 +313,32 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	// Step 0: Pause the frontend listener before draining. Best-effort: if
+	// Readiness is already 503; kube-proxy still needs ~15-25s to drop
+	// Service endpoints. Wait before PAUSE so late connects are not RESET.
+	pauseDelay := time.Duration(p.settings.Shutdown.PauseDelay) * time.Second
+	if p.pauseDelayOverride > 0 {
+		pauseDelay = p.pauseDelayOverride
+	}
+
+	if pauseDelay > 0 {
+		slog.Info("waiting for endpoint propagation", slog.Duration("pause_delay", pauseDelay))
+
+		timer := time.NewTimer(pauseDelay)
+		select {
+		case <-shutdownCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+
+			slog.Warn("shutdown timeout reached during pause delay, proceeding with pause")
+		case <-timer.C:
+		}
+	}
+
+	// Pause the frontend listener before draining. Best-effort: if
 	// PAUSE fails we still drain and shut down. WithoutCancel preserves values
 	// while ensuring PAUSE still fires if the caller's context is already done.
 	p.pauseProxySQL(context.WithoutCancel(shutdownCtx))

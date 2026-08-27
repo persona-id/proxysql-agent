@@ -23,6 +23,8 @@ var (
 	ErrNegativeStartDelay        = errors.New("start_delay cannot be < 0")
 	ErrNegativeCoreInterval      = errors.New("core.interval cannot be < 0")
 	ErrNegativeSatelliteInterval = errors.New("satellite.interval cannot be < 0")
+	ErrNegativePauseDelay        = errors.New("shutdown.pause_delay cannot be < 0")
+	ErrShutdownTimeoutTooShort   = errors.New("shutdown.shutdown_timeout must be greater than pause_delay + drain_timeout")
 	ErrMissingPort               = errors.New("missing port in address")
 )
 
@@ -58,6 +60,7 @@ type Config struct {
 	Shutdown struct {
 		DrainingFile    string `mapstructure:"draining_file"`
 		DrainTimeout    int    `mapstructure:"drain_timeout"`
+		PauseDelay      int    `mapstructure:"pause_delay"`
 		ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
 	} `mapstructure:"shutdown"`
 }
@@ -180,8 +183,11 @@ func setupDefaults() {
 	viper.GetViper().SetDefault("api.port", 8080) //nolint:mnd
 	viper.GetViper().SetDefault("shutdown.draining_file", "/var/lib/proxysql/draining")
 
-	viper.GetViper().SetDefault("shutdown.drain_timeout", 30)    //nolint:mnd
-	viper.GetViper().SetDefault("shutdown.shutdown_timeout", 60) //nolint:mnd
+	viper.GetViper().SetDefault("shutdown.drain_timeout", 30) //nolint:mnd
+	viper.GetViper().SetDefault("shutdown.pause_delay", 20)   //nolint:mnd
+	// Must exceed pause_delay + drain_timeout so the endpoint-propagation
+	// wait and the drain window both finish before the deadline.
+	viper.GetViper().SetDefault("shutdown.shutdown_timeout", 100) //nolint:mnd
 }
 
 // setupFlags sets up command line flags.
@@ -207,8 +213,9 @@ func setupFlags() error {
 
 	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
-	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL") //nolint:mnd
-	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")           //nolint:mnd
+	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL")                           //nolint:mnd
+	pflag.Int("shutdown.pause_delay", 20, "seconds to wait after readiness 503 before PROXYSQL PAUSE so kube-proxy can drop Service endpoints") //nolint:mnd
+	pflag.Int("shutdown.shutdown_timeout", 100, "seconds before the shutdown process is forcibly abandoned")                                    //nolint:mnd
 
 	pflag.Bool("show-config", false, "Dump the configuration for debugging")
 
@@ -246,6 +253,17 @@ func validateConfig() error {
 
 	if sinterval := viper.GetViper().GetInt("satellite.interval"); sinterval < 0 {
 		return ErrNegativeSatelliteInterval
+	}
+
+	pauseDelay := viper.GetViper().GetInt("shutdown.pause_delay")
+	if pauseDelay < 0 {
+		return ErrNegativePauseDelay
+	}
+
+	drainTimeout := viper.GetViper().GetInt("shutdown.drain_timeout")
+	shutdownTimeout := viper.GetViper().GetInt("shutdown.shutdown_timeout")
+	if shutdownTimeout <= pauseDelay+drainTimeout {
+		return ErrShutdownTimeoutTooShort
 	}
 
 	return nil
@@ -342,6 +360,9 @@ func logDebugInfo(settings *Config) {
 			slog.String("core.podselector.component", settings.Core.PodSelector.Component),
 			slog.Int("api.port", settings.API.Port),
 			slog.String("shutdown.draining_file", settings.Shutdown.DrainingFile),
+			slog.Int("shutdown.drain_timeout", settings.Shutdown.DrainTimeout),
+			slog.Int("shutdown.pause_delay", settings.Shutdown.PauseDelay),
+			slog.Int("shutdown.shutdown_timeout", settings.Shutdown.ShutdownTimeout),
 		),
 	)
 }

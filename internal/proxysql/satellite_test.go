@@ -357,6 +357,88 @@ func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
 	}
 }
 
+func TestGracefulShutdownWaitsForPauseDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		pauseDelayOverride time.Duration
+		cancelCtx          bool
+		minPauseWait       time.Duration
+		maxElapsed         time.Duration
+	}{
+		{
+			name:               "PAUSE is not executed before pause delay elapses",
+			pauseDelayOverride: 50 * time.Millisecond,
+			minPauseWait:       50 * time.Millisecond,
+		},
+		{
+			name:               "cancelled context still pauses without waiting full delay",
+			pauseDelayOverride: 2 * time.Second,
+			cancelCtx:          true,
+			maxElapsed:         500 * time.Millisecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create mock DB: %v", err)
+			}
+			defer db.Close()
+
+			mock.MatchExpectationsInOrder(true)
+			mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec("PROXYSQL SHUTDOWN").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectClose()
+
+			cfg := newTestConfig()
+			cfg.Shutdown.DrainTimeout = 0
+			cfg.Shutdown.ShutdownTimeout = 2
+
+			proxy := &ProxySQL{
+				conn:               db,
+				settings:           cfg,
+				shutdownPhase:      PhaseDraining,
+				shutdownMu:         sync.RWMutex{},
+				drainTickInterval:  10 * time.Millisecond,
+				pauseDelayOverride: tt.pauseDelayOverride,
+			}
+
+			ctx := context.Background()
+			if tt.cancelCtx {
+				var cancel context.CancelFunc
+
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+
+			start := time.Now()
+
+			if err := proxy.gracefulShutdown(ctx); err != nil {
+				t.Errorf("gracefulShutdown() unexpected error: %v", err)
+			}
+
+			elapsed := time.Since(start)
+
+			if tt.minPauseWait > 0 && elapsed < tt.minPauseWait {
+				t.Errorf("PAUSE executed after %v, want >= %v", elapsed, tt.minPauseWait)
+			}
+
+			if tt.maxElapsed > 0 && elapsed > tt.maxElapsed {
+				t.Errorf("gracefulShutdown took %v, want <= %v (pause delay should have been aborted)", elapsed, tt.maxElapsed)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations not met: %v", err)
+			}
+		})
+	}
+}
+
 func TestDumpQueryDigests(t *testing.T) {
 	t.Parallel()
 
