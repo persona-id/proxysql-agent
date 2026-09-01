@@ -69,9 +69,11 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		return nil, fmt.Errorf("failed to open MySQL connection: %w", err)
 	}
 
-	err = conn.PingContext(context.Background())
+	connectTimeout := time.Duration(settings.ProxySQL.ConnectTimeout) * time.Second
+
+	err = waitForProxySQL(context.Background(), conn, connectTimeout, connectRetryInterval, address)
 	if err != nil {
-		return nil, fmt.Errorf("failed to ping ProxySQL: %w", err)
+		return nil, err
 	}
 
 	slog.Info("Connected to ProxySQL admin", slog.String("Host", address))
@@ -87,6 +89,54 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		retryDelay:    podAddedRetryDelay,
 		podWg:         sync.WaitGroup{},
 	}, nil
+}
+
+// connectRetryInterval is the delay between attempts at the initial admin connection.
+// ProxySQL opens its admin listener a few seconds into boot, so polling at this rate
+// hands the agent a connection promptly once it is up.
+const connectRetryInterval = time.Second
+
+// waitForProxySQL blocks until ProxySQL's admin interface accepts a connection, giving
+// up once timeout has elapsed. The agent shares a pod with ProxySQL, and when it
+// runs as a native sidecar it starts first: the kubelet holds ProxySQL until the agent
+// container is running, so the opening attempts are refused on every pod start. Treating
+// the first refusal as fatal therefore costs a container restart every time.
+//
+// A timeout of 0 keeps the single-attempt behavior, failing on the first refusal.
+func waitForProxySQL(ctx context.Context, conn *sql.DB, timeout, interval time.Duration, address string) error {
+	deadline := time.Now().Add(timeout)
+
+	for attempt := 1; ; attempt++ {
+		err := conn.PingContext(ctx)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("ProxySQL admin interface accepted a connection",
+					slog.String("address", address),
+					slog.Int("attempts", attempt),
+				)
+			}
+
+			return nil
+		}
+
+		// Stop when another wait would carry us past the deadline, so the total time
+		// spent here stays within timeout.
+		if !time.Now().Add(interval).Before(deadline) {
+			return fmt.Errorf("%w at %s after %d attempts: %w", ErrProxySQLUnreachable, address, attempt, err)
+		}
+
+		slog.Debug("ProxySQL admin interface not ready, retrying",
+			slog.String("address", address),
+			slog.Int("attempt", attempt),
+			slog.Any("error", err),
+		)
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w at %s: %w", ErrProxySQLUnreachable, address, ctx.Err())
+		case <-time.After(interval):
+		}
+	}
 }
 
 func (p *ProxySQL) Ping(ctx context.Context) error {

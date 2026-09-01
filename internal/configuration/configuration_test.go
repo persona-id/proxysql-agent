@@ -56,6 +56,11 @@ func TestValidations(t *testing.T) {
 			args:    []string{"cmd", "--start_delay=-1"},
 		},
 		{
+			name:    "negative proxysql.connect_timeout",
+			wantErr: ErrNegativeConnectTimeout,
+			args:    []string{"cmd", "--proxysql.connect_timeout=-1"},
+		},
+		{
 			name:    "negative core.interval",
 			wantErr: ErrNegativeCoreInterval,
 			args:    []string{"cmd", "--core.interval=-1"},
@@ -118,6 +123,7 @@ func TestDefaults(t *testing.T) {
 		{"Log.Probes", false, config.Log.Probes},
 		{"ProxySQL.Address", "127.0.0.1:6032", config.ProxySQL.Address},
 		{"ProxySQL.Username", "radmin", config.ProxySQL.Username},
+		{"ProxySQL.ConnectTimeout", 60, config.ProxySQL.ConnectTimeout},
 		{"Core.Interval", 10, config.Core.Interval},
 		{"Core.PodSelector.Namespace", "proxysql", config.Core.PodSelector.Namespace},
 		{"Core.PodSelector.App", "proxysql", config.Core.PodSelector.App},
@@ -697,9 +703,10 @@ func TestLogDebugInfo(t *testing.T) {
 		RunMode:    "core",
 		StartDelay: 5,
 		ProxySQL: struct {
-			Address  string `mapstructure:"address"`
-			Username string `mapstructure:"username"`
-			Password string `mapstructure:"password"`
+			Address        string `mapstructure:"address"`
+			Username       string `mapstructure:"username"`
+			Password       string `mapstructure:"password"`
+			ConnectTimeout int    `mapstructure:"connect_timeout"`
 		}{
 			Address:  "127.0.0.1:6032",
 			Username: "admin",

@@ -3,6 +3,7 @@ linters:
   default: all
   disable:
     - exhaustruct
+    - exhaustruct_v5
     - godoclint
     - lll
     - noinlineerr
@@ -83,6 +84,11 @@ linters:
       - path: internal/configuration/configuration_test\.go
         linters:
           - paralleltest
+      # Fixture strings repeat across table-driven cases by nature; reading them inline
+      # beats chasing a constant to find out which pod name or namespace a case uses.
+      - path: _test\.go
+        linters:
+          - goconst
       # G101: Test data with env var names is not hardcoded credentials
       # G117: Password field name in config structs is not a hardcoded secret
       # G703: File paths come from config/hostname, not user input

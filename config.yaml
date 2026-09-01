@@ -29,6 +29,10 @@ proxysql:
   username: "radmin"
   # Password for the admin interface; no default set
   password: "radmin"
+  # Seconds to keep retrying the initial admin connection before giving up. The agent
+  # starts before ProxySQL when it runs as a native sidecar, so the opening attempts are
+  # expected to be refused. 0 fails on the first refusal. Defaults to 60.
+  connect_timeout: 60
 
 # The mode in which the agent should run, if any. valid values: [core OR satellite], no default
 # run_mode: core
