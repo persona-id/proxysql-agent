@@ -20,6 +20,7 @@ import (
 
 var (
 	ErrInvalidRunMode            = errors.New("run_mode must be either 'core' or 'satellite'")
+	ErrNegativeConnectTimeout    = errors.New("proxysql.connect_timeout cannot be < 0")
 	ErrNegativeStartDelay        = errors.New("start_delay cannot be < 0")
 	ErrNegativeCoreInterval      = errors.New("core.interval cannot be < 0")
 	ErrNegativeSatelliteInterval = errors.New("satellite.interval cannot be < 0")
@@ -28,9 +29,10 @@ var (
 
 type Config struct {
 	ProxySQL struct {
-		Address  string `mapstructure:"address"`
-		Username string `mapstructure:"username"`
-		Password string `mapstructure:"password"`
+		Address        string `mapstructure:"address"`
+		Username       string `mapstructure:"username"`
+		Password       string `mapstructure:"password"`
+		ConnectTimeout int    `mapstructure:"connect_timeout"`
 	} `mapstructure:"proxysql"`
 	Log struct {
 		Level  string `mapstructure:"level"`
@@ -169,6 +171,7 @@ func setupDefaults() {
 	viper.GetViper().SetDefault("proxysql.address", "127.0.0.1:6032")
 	viper.GetViper().SetDefault("proxysql.username", "radmin")
 	viper.GetViper().SetDefault("proxysql.password", "")
+	viper.GetViper().SetDefault("proxysql.connect_timeout", 60) //nolint:mnd
 
 	viper.GetViper().SetDefault("core.interval", 10) //nolint:mnd
 	viper.GetViper().SetDefault("core.podselector.namespace", "proxysql")
@@ -197,6 +200,7 @@ func setupFlags() error {
 	pflag.String("proxysql.address", "127.0.0.1:6032", "proxysql admin interface address")
 	pflag.String("proxysql.username", "radmin", "user for the proxysql admin interface")
 	pflag.String("proxysql.password", "radmin", "password for the proxysql admin interface; this is not recommended for use in production")
+	pflag.Int("proxysql.connect_timeout", 60, "seconds to keep retrying the initial ProxySQL admin connection before giving up") //nolint:mnd
 
 	pflag.Int("core.interval", 10, "seconds to sleep in the core clustering loop") //nolint:mnd
 	pflag.String("core.podselector.namespace", "proxysql", "namespace to use in the k8s pod selector label")
@@ -238,6 +242,10 @@ func validateConfig() error {
 
 	if delay := viper.GetViper().GetInt("start_delay"); delay < 0 {
 		return ErrNegativeStartDelay
+	}
+
+	if timeout := viper.GetViper().GetInt("proxysql.connect_timeout"); timeout < 0 {
+		return ErrNegativeConnectTimeout
 	}
 
 	if cinterval := viper.GetViper().GetInt("core.interval"); cinterval < 0 {
@@ -335,6 +343,7 @@ func logDebugInfo(settings *Config) {
 			slog.String("proxysql.address", settings.ProxySQL.Address),
 			slog.String("proxysql.username", settings.ProxySQL.Username),
 			slog.String("proxysql.password", "[REDACTED]"),
+			slog.Int("proxysql.connect_timeout", settings.ProxySQL.ConnectTimeout),
 			slog.Int("satellite.interval", settings.Satellite.Interval),
 			slog.Int("core.interval", settings.Core.Interval),
 			slog.String("core.podselector.namespace", settings.Core.PodSelector.Namespace),

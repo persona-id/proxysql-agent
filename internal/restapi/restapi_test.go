@@ -151,7 +151,7 @@ func TestRouteRegistration(t *testing.T) {
 		t.Run(route.path, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequest(route.method, route.path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), route.method, route.path, nil)
 			w := httptest.NewRecorder()
 
 			// This will likely panic or error due to nil ProxySQL, but it proves routes are registered

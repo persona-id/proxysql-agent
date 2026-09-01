@@ -14,7 +14,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"gopkg.in/DATA-DOG/go-sqlmock.v2"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
@@ -113,12 +112,10 @@ func TestPodUpdated(t *testing.T) {
 			}
 
 			oldpod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "old-pod",
-					Namespace: "test-ns",
-					Labels: map[string]string{
-						"component": "core",
-					},
+				Name:      "old-pod",
+				Namespace: "test-ns",
+				Labels: map[string]string{
+					"component": "core",
 				},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.2",
@@ -127,12 +124,10 @@ func TestPodUpdated(t *testing.T) {
 			}
 
 			newpod := &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "new-pod",
-					Namespace: "test-ns",
-					Labels: map[string]string{
-						"component": "core",
-					},
+				Name:      "new-pod",
+				Namespace: "test-ns",
+				Labels: map[string]string{
+					"component": "core",
 				},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.3",
@@ -166,11 +161,9 @@ func TestPodAdded(t *testing.T) {
 		{
 			name: "pending pod does not spawn goroutine",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      "test-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.1",
 					Phase: v1.PodPending,
@@ -231,11 +224,9 @@ func TestAddPodWhenReady(t *testing.T) {
 		{
 			name: "pod already exists in cluster",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      hostname,
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.1",
 					Phase: v1.PodRunning,
@@ -255,11 +246,9 @@ func TestAddPodWhenReady(t *testing.T) {
 		{
 			name: "pod does not exist in cluster",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      hostname,
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      hostname,
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.1",
 					Phase: v1.PodRunning,
@@ -290,11 +279,9 @@ func TestAddPodWhenReady(t *testing.T) {
 		{
 			name: "pod with a different name is added to cluster",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "other-core-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      "other-core-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.4",
 					Phase: v1.PodRunning,
@@ -325,11 +312,9 @@ func TestAddPodWhenReady(t *testing.T) {
 		{
 			name: "retries more than 3 times until ProxySQL is ready",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      "test-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.1",
 					Phase: v1.PodRunning,
@@ -367,11 +352,9 @@ func TestAddPodWhenReady(t *testing.T) {
 		{
 			name: "stops retrying when context is cancelled",
 			pod: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
+				Name:      "test-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
 				Status: v1.PodStatus{
 					PodIP: "10.0.0.1",
 					Phase: v1.PodRunning,
@@ -626,12 +609,10 @@ func TestReconcileCluster(t *testing.T) {
 			name: "no stale entries: nothing deleted",
 			pods: []*v1.Pod{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-pod",
-						Namespace: "proxysql",
-						Labels:    map[string]string{"app": "proxysql", "component": "core"},
-					},
-					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+					Name:      "test-pod",
+					Namespace: "proxysql",
+					Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -643,12 +624,10 @@ func TestReconcileCluster(t *testing.T) {
 			name: "stale entries are removed",
 			pods: []*v1.Pod{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-pod",
-						Namespace: "proxysql",
-						Labels:    map[string]string{"app": "proxysql", "component": "core"},
-					},
-					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+					Name:      "test-pod",
+					Namespace: "proxysql",
+					Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -671,12 +650,10 @@ func TestReconcileCluster(t *testing.T) {
 			name: "proxysql-core placeholder is never deleted",
 			pods: []*v1.Pod{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-pod",
-						Namespace: "proxysql",
-						Labels:    map[string]string{"app": "proxysql", "component": "core"},
-					},
-					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+					Name:      "test-pod",
+					Namespace: "proxysql",
+					Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -690,12 +667,10 @@ func TestReconcileCluster(t *testing.T) {
 			name: "non-running pods treated as absent",
 			pods: []*v1.Pod{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pending-pod",
-						Namespace: "proxysql",
-						Labels:    map[string]string{"app": "proxysql", "component": "core"},
-					},
-					Status: v1.PodStatus{Phase: v1.PodPending, PodIP: "10.0.0.1"},
+					Name:      "pending-pod",
+					Namespace: "proxysql",
+					Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					Status:    v1.PodStatus{Phase: v1.PodPending, PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -712,12 +687,10 @@ func TestReconcileCluster(t *testing.T) {
 			name: "error querying proxysql_servers returns error",
 			pods: []*v1.Pod{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-pod",
-						Namespace: "proxysql",
-						Labels:    map[string]string{"app": "proxysql", "component": "core"},
-					},
-					Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+					Name:      "test-pod",
+					Namespace: "proxysql",
+					Labels:    map[string]string{"app": "proxysql", "component": "core"},
+					Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -793,12 +766,10 @@ func TestPodDeleted(t *testing.T) {
 		{
 			name: "core pod deleted removes from cluster",
 			object: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "core"},
-				},
-				Status: v1.PodStatus{PodIP: "10.0.0.1"},
+				Name:      "test-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "core"},
+				Status:    v1.PodStatus{PodIP: "10.0.0.1"},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectExec(
@@ -811,12 +782,10 @@ func TestPodDeleted(t *testing.T) {
 		{
 			name: "satellite pod deleted only runs runtime loads",
 			object: &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "test-ns",
-					Labels:    map[string]string{"component": "satellite"},
-				},
-				Status: v1.PodStatus{PodIP: "10.0.0.1"},
+				Name:      "test-pod",
+				Namespace: "test-ns",
+				Labels:    map[string]string{"component": "satellite"},
+				Status:    v1.PodStatus{PodIP: "10.0.0.1"},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				expectServersLoad(mock)
@@ -832,12 +801,10 @@ func TestPodDeleted(t *testing.T) {
 			object: cache.DeletedFinalStateUnknown{
 				Key: "test-ns/test-pod",
 				Obj: &v1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "test-pod",
-						Namespace: "test-ns",
-						Labels:    map[string]string{"component": "core"},
-					},
-					Status: v1.PodStatus{PodIP: "10.0.0.1"},
+					Name:      "test-pod",
+					Namespace: "test-ns",
+					Labels:    map[string]string{"component": "core"},
+					Status:    v1.PodStatus{PodIP: "10.0.0.1"},
 				},
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
@@ -891,12 +858,10 @@ func TestReconcileLoop(t *testing.T) {
 		mock.MatchExpectationsInOrder(true)
 
 		pod := &v1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "core-0",
-				Namespace: "proxysql",
-				Labels:    map[string]string{"app": "proxysql", "component": "core"},
-			},
-			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+			Name:      "core-0",
+			Namespace: "proxysql",
+			Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 		}
 
 		// Round 1 (initial): no stale entries
@@ -945,12 +910,10 @@ func TestReconcileLoop(t *testing.T) {
 		mock.MatchExpectationsInOrder(true)
 
 		pod := &v1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "core-0",
-				Namespace: "proxysql",
-				Labels:    map[string]string{"app": "proxysql", "component": "core"},
-			},
-			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+			Name:      "core-0",
+			Namespace: "proxysql",
+			Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 		}
 
 		// No SQL expectations — should exit before querying
@@ -992,12 +955,10 @@ func TestReconcileLoop(t *testing.T) {
 		mock.MatchExpectationsInOrder(true)
 
 		pod := &v1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "core-0",
-				Namespace: "proxysql",
-				Labels:    map[string]string{"app": "proxysql", "component": "core"},
-			},
-			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+			Name:      "core-0",
+			Namespace: "proxysql",
+			Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 		}
 
 		// Initial reconciliation succeeds
@@ -1041,12 +1002,10 @@ func TestReconcileLoop(t *testing.T) {
 		mock.MatchExpectationsInOrder(true)
 
 		pod := &v1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "core-0",
-				Namespace: "proxysql",
-				Labels:    map[string]string{"app": "proxysql", "component": "core"},
-			},
-			Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
+			Name:      "core-0",
+			Namespace: "proxysql",
+			Labels:    map[string]string{"app": "proxysql", "component": "core"},
+			Status:    v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1"},
 		}
 
 		// Initial: fail twice
@@ -1196,12 +1155,10 @@ func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock
 	}
 
 	pod := &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"component": component,
-			},
+		Name:      "test-pod",
+		Namespace: namespace,
+		Labels: map[string]string{
+			"component": component,
 		},
 		Status: v1.PodStatus{
 			PodIP: "10.0.0.1",

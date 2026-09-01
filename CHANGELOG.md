@@ -2,6 +2,12 @@
 
 See the [releases](https://github.com/persona-id/proxysql-agent/releases) page for full details.
 
+## Unreleased
+
+- Go 1.27. The `modernize` linter's `embedlit` rule only fires at this language version, so core tests now set promoted `ObjectMeta` fields directly in `v1.Pod` literals. golangci-lint moved to v2.13.2, the first release built with Go 1.27 — an older linter refuses a module targeting a newer language version. That version also renamed `exhaustruct` to `exhaustruct_v5`, which `default: all` re-enabled until it was disabled under the new name alongside the existing `wsl`/`wsl_v5` pair.
+
+- The initial ProxySQL admin connection now retries for up to `proxysql.connect_timeout` seconds (default 60) instead of failing on the first refused ping. As a native sidecar the agent starts before ProxySQL and the kubelet holds ProxySQL until the agent container is running, so the opening attempts are refused on every pod start — the agent panicked and was restarted once per pod, on every pod. Set the timeout to 0 for the previous single-attempt behavior. An unreachable ProxySQL now exits non-zero with a plain error rather than dumping a goroutine stack.
+
 ## 1.2.3 - 08/14/2026
 
 - Satellite graceful shutdown now issues `PROXYSQL PAUSE` before the drain wait and `PROXYSQL SHUTDOWN`. Readiness 503 alone left sticky Rails pool sockets pinned to the dying pod until shutdown severed them mid-query (`Trilogy::EOFError` / `CLOSED_CONNECTION`). PAUSE stops the frontend listener and sets `mysql-wait_timeout=0` so idle clients close while healthy Service peers take new traffic; plain `SHUTDOWN` follows (no `SLOW`). OrbStack smoke asserts PAUSE runs and service traffic survives satellite drain.

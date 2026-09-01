@@ -3,7 +3,7 @@
 # This file is used by the devcontainer to build the Docker image, and is NOT used by GoReleaser
 
 # Stage 1
-FROM golang:1.25.0-alpine AS builder
+FROM golang:1.27.0-alpine AS builder
 
 ARG BUILD_SHA
 ARG BUILD_TIME

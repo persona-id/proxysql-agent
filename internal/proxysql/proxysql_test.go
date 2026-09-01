@@ -2,8 +2,15 @@ package proxysql
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"math"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 
@@ -342,9 +349,10 @@ func newTestConfig() *configuration.Config {
 			Probes: false,
 		},
 		ProxySQL: struct {
-			Address  string `mapstructure:"address"`
-			Username string `mapstructure:"username"`
-			Password string `mapstructure:"password"`
+			Address        string `mapstructure:"address"`
+			Username       string `mapstructure:"username"`
+			Password       string `mapstructure:"password"`
+			ConnectTimeout int    `mapstructure:"connect_timeout"`
 		}{
 			Address:  "127.0.0.1:6032",
 			Username: "radmin",
@@ -376,5 +384,145 @@ func newTestConfig() *configuration.Config {
 			Interval: 10,
 		},
 		Interfaces: []string{},
+	}
+}
+
+// pingSequenceDriver hands out connections whose Ping fails a fixed number of times
+// before succeeding. The vendored sqlmock cannot mock pings, and a refused ping is the
+// exact condition waitForProxySQL exists to ride out.
+type pingSequenceDriver struct {
+	remainingFailures *atomic.Int32
+}
+
+func (d pingSequenceDriver) Open(_ string) (driver.Conn, error) {
+	return pingSequenceConn(d), nil
+}
+
+type pingSequenceConn struct {
+	remainingFailures *atomic.Int32
+}
+
+func (c pingSequenceConn) Ping(_ context.Context) error {
+	if c.remainingFailures.Add(-1) >= 0 {
+		return errConnectionRefused
+	}
+
+	return nil
+}
+
+func (c pingSequenceConn) Prepare(_ string) (driver.Stmt, error) { return nil, errNotImplemented }
+func (c pingSequenceConn) Close() error                          { return nil }
+func (c pingSequenceConn) Begin() (driver.Tx, error)             { return nil, errNotImplemented }
+
+var (
+	errConnectionRefused = errors.New("connect: connection refused")
+	errNotImplemented    = errors.New("not implemented")
+)
+
+// openPingSequenceDB registers a uniquely named driver whose first `failures` pings fail.
+func openPingSequenceDB(t *testing.T, failures int32) *sql.DB {
+	t.Helper()
+
+	remaining := &atomic.Int32{}
+	remaining.Store(failures)
+
+	name := "ping-sequence-" + t.Name()
+	sql.Register(name, pingSequenceDriver{remainingFailures: remaining})
+
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatalf("sql.Open() returned an error: %v", err)
+	}
+
+	t.Cleanup(func() { db.Close() })
+
+	return db
+}
+
+func TestWaitForProxySQLSucceedsImmediately(t *testing.T) {
+	t.Parallel()
+
+	db := openPingSequenceDB(t, 0)
+
+	err := waitForProxySQL(context.Background(), db, time.Second, time.Millisecond, "127.0.0.1:6032")
+	if err != nil {
+		t.Errorf("waitForProxySQL() returned an error: %v", err)
+	}
+}
+
+func TestWaitForProxySQLRetriesUntilReady(t *testing.T) {
+	t.Parallel()
+
+	db := openPingSequenceDB(t, 3)
+
+	err := waitForProxySQL(context.Background(), db, time.Second, time.Millisecond, "127.0.0.1:6032")
+	if err != nil {
+		t.Errorf("waitForProxySQL() returned an error after retrying: %v", err)
+	}
+}
+
+func TestWaitForProxySQLGivesUpAfterTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Never succeeds, so the loop has to be bounded by the timeout.
+	db := openPingSequenceDB(t, math.MaxInt32)
+
+	start := time.Now()
+
+	err := waitForProxySQL(context.Background(), db, 50*time.Millisecond, time.Millisecond, "127.0.0.1:6032")
+	if err == nil {
+		t.Fatal("waitForProxySQL() should have returned an error when ProxySQL never came up")
+	}
+
+	if !errors.Is(err, ErrProxySQLUnreachable) {
+		t.Errorf("error should wrap ErrProxySQLUnreachable, got: %v", err)
+	}
+
+	// The underlying ping failure should survive in the chain for debugging.
+	if !errors.Is(err, errConnectionRefused) {
+		t.Errorf("error should wrap the ping failure, got: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waitForProxySQL() overran its timeout, took %s", elapsed)
+	}
+}
+
+// A zero timeout preserves the original single-attempt behavior, so callers that want to
+// fail fast still can.
+func TestWaitForProxySQLZeroTimeoutMakesOneAttempt(t *testing.T) {
+	t.Parallel()
+
+	db := openPingSequenceDB(t, math.MaxInt32)
+
+	err := waitForProxySQL(context.Background(), db, 0, time.Millisecond, "127.0.0.1:6032")
+	if err == nil {
+		t.Fatal("waitForProxySQL() should have returned an error with a zero timeout")
+	}
+
+	if !errors.Is(err, ErrProxySQLUnreachable) {
+		t.Errorf("error should wrap ErrProxySQLUnreachable, got: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "after 1 attempts") {
+		t.Errorf("a zero timeout should make exactly one attempt, got: %v", err)
+	}
+}
+
+func TestWaitForProxySQLStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	db := openPingSequenceDB(t, math.MaxInt32)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitForProxySQL(ctx, db, time.Hour, time.Millisecond, "127.0.0.1:6032")
+	if err == nil {
+		t.Fatal("waitForProxySQL() should have returned an error on a cancelled context")
+	}
+
+	if !errors.Is(err, ErrProxySQLUnreachable) {
+		t.Errorf("error should wrap ErrProxySQLUnreachable, got: %v", err)
 	}
 }

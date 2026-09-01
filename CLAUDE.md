@@ -95,7 +95,7 @@ Example: `AGENT_PROXYSQL_PASSWORD` sets the ProxySQL admin password.
 
 ## Dependencies
 
-- Go 1.25.0+
+- Go 1.27.0+
 - Key dependencies: MySQL driver, Viper, Kubernetes client-go, slog, tint (colored logging)
 - Uses golangci-lint v2 with comprehensive rule set (see `.golangci.yml`)
 

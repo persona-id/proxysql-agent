@@ -4,7 +4,7 @@
 
 ## About
 
-The ProxySQL agent is a small, statically compiled Go binary (Go 1.25) for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster, primarily designed as a Kubernetes sidecar container. The repo includes a [Dockerfile](build/Dockerfile) to generate a debian-based image, or you can use the version in the [GitHub Container Registry](https://github.com/persona-id/proxysql-agent/pkgs/container/proxysql-agent).
+The ProxySQL agent is a small, statically compiled Go binary (Go 1.27) for use in maintaining the state of a [ProxySQL](https://github.com/sysown/proxysql) cluster, primarily designed as a Kubernetes sidecar container. The repo includes a [Dockerfile](build/Dockerfile) to generate a debian-based image, or you can use the version in the [GitHub Container Registry](https://github.com/persona-id/proxysql-agent/pkgs/container/proxysql-agent).
 
 There exists relatively little tooling around ProxySQL, so we hope that this is useful to others out there, even if it's just to learn how to maintain a cluster.
 

@@ -20,10 +20,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// if defined, pause before booting; this allows the proxysql containers to fully come up before the agent tries
-	// connecting; sometimes the proxysql container can take a few seconds to fully start. This is mainly only
-	// an issue when booting into core or satellite mode; any other commands that might be run ad hoc should be
-	// fine
+	// If defined, pause before booting. New() waits for ProxySQL on its own, so this is
+	// no longer needed to cover a slow ProxySQL start; it remains for callers that want
+	// the agent to hold off entirely before touching ProxySQL.
 	if settings.StartDelay > 0 {
 		slog.Info("pausing before boot", slog.Int("seconds", settings.StartDelay))
 		time.Sleep(time.Duration(settings.StartDelay) * time.Second)
@@ -34,7 +33,7 @@ func main() {
 	psql, err = psql.New(settings)
 	if err != nil {
 		slog.Error("unable to connect to ProxySQL", slog.Any("error", err))
-		panic(err)
+		os.Exit(1)
 	}
 
 	// Set up signal handling for the graceful shutdown and usr{1,2} signals.
