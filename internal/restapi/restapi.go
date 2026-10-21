@@ -1,11 +1,14 @@
 package restapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
@@ -20,6 +23,7 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 	mux.HandleFunc("/healthz/started", startupHandler(p, settings))
 	mux.HandleFunc("/healthz/ready", readinessHandler(p, settings))
 	mux.HandleFunc("/healthz/live", livenessHandler(p, settings))
+	mux.HandleFunc("/metrics", metricsHandler(p))
 	mux.HandleFunc("/shutdown", preStopHandler(p, settings))
 
 	port := fmt.Sprintf(":%d", settings.API.Port)
@@ -54,6 +58,55 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 	}()
 
 	return server
+}
+
+type metricsReader interface {
+	Metrics(ctx context.Context) (proxysql.Metrics, error)
+}
+
+const metricsTimeout = 5 * time.Second
+
+func metricsHandler(reader metricsReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), metricsTimeout)
+		defer cancel()
+
+		metrics, err := reader.Metrics(ctx)
+		if err != nil {
+			slog.Error("Error collecting metrics", slog.Any("err", err))
+			http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		fmt.Fprintln(w, "# HELP proxysql_frontend_connections_connected Current frontend client connections.")
+		fmt.Fprintln(w, "# TYPE proxysql_frontend_connections_connected gauge")
+		fmt.Fprintf(w, "proxysql_frontend_connections_connected %d\n", metrics.FrontendConnections)
+		fmt.Fprintln(w, "# HELP proxysql_backend_connections_used Current connections in use for a backend pool.")
+		fmt.Fprintln(w, "# TYPE proxysql_backend_connections_used gauge")
+
+		for _, metric := range metrics.BackendConnections {
+			fmt.Fprintf(
+				w,
+				"proxysql_backend_connections_used{hostgroup=%s,port=%s,server=%s} %d\n",
+				metricLabelValue(strconv.Itoa(metric.Hostgroup)),
+				metricLabelValue(strconv.Itoa(metric.Port)),
+				metricLabelValue(metric.Server),
+				metric.ConnectionsUsed,
+			)
+		}
+	}
+}
+
+func metricLabelValue(value string) string {
+	escaped := strings.NewReplacer(
+		"\\", "\\\\",
+		"\n", "\\n",
+		"\"", "\\\"",
+	).Replace(value)
+
+	return `"` + escaped + `"`
 }
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.
@@ -229,8 +282,8 @@ func startupHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.Handl
 
 // preStopHandler is an HTTP request handler function that handles the prestop shutdown endpoint.
 func preStopHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		err := psql.PreStopShutdown()
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := psql.PreStopShutdown(r.Context())
 		if err != nil {
 			// Log error but still return success since this is a prestop hook
 			slog.Error("prestop shutdown failed", slog.Any("error", err))

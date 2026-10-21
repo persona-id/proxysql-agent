@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -327,6 +328,121 @@ func TestProbeClients(t *testing.T) {
 			mockErr := mock.ExpectationsWereMet()
 			if mockErr != nil {
 				t.Errorf("SQL expectations not met: %v", mockErr)
+			}
+		})
+	}
+}
+
+func TestMetrics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		nilConn       bool
+		setupMock     func(mock sqlmock.Sqlmock)
+		shutdownPhase ShutdownPhase
+		want          Metrics
+		wantErr       error
+	}{
+		{
+			name: "returns frontend and backend connections",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT Client_Connections_connected").
+					WillReturnRows(sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(17))
+				mock.ExpectQuery("SELECT hostgroup, srv_host, srv_port, ConnUsed").
+					WillReturnRows(
+						sqlmock.NewRows([]string{"hostgroup", "srv_host", "srv_port", "ConnUsed"}).
+							AddRow(2, "primary.internal", 6033, 23).
+							AddRow(2, "primary.internal", 6034, 11),
+					)
+			},
+			shutdownPhase: PhaseRunning,
+			want: Metrics{
+				BackendConnections: []BackendConnectionMetric{
+					{ConnectionsUsed: 23, Hostgroup: 2, Port: 6033, Server: "primary.internal"},
+					{ConnectionsUsed: 11, Hostgroup: 2, Port: 6034, Server: "primary.internal"},
+				},
+				FrontendConnections: 17,
+			},
+		},
+		{
+			name: "returns an empty backend collection",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT Client_Connections_connected").
+					WillReturnRows(sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(0))
+				mock.ExpectQuery("SELECT hostgroup, srv_host, srv_port, ConnUsed").
+					WillReturnRows(sqlmock.NewRows([]string{"hostgroup", "srv_host", "srv_port", "ConnUsed"}))
+			},
+			shutdownPhase: PhaseRunning,
+			want: Metrics{
+				BackendConnections:  []BackendConnectionMetric{},
+				FrontendConnections: 0,
+			},
+		},
+		{
+			name: "returns a frontend query error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT Client_Connections_connected").WillReturnError(ErrDatabase)
+			},
+			shutdownPhase: PhaseRunning,
+			wantErr:       ErrDatabase,
+		},
+		{
+			name: "returns a backend query error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT Client_Connections_connected").
+					WillReturnRows(sqlmock.NewRows([]string{"Client_Connections_connected"}).AddRow(4))
+				mock.ExpectQuery("SELECT hostgroup, srv_host, srv_port, ConnUsed").WillReturnError(ErrDatabase)
+			},
+			shutdownPhase: PhaseRunning,
+			wantErr:       ErrDatabase,
+		},
+		{
+			name:          "returns unavailable while shutting down",
+			setupMock:     func(_ sqlmock.Sqlmock) {},
+			shutdownPhase: PhaseDraining,
+			wantErr:       ErrShuttingDown,
+		},
+		{
+			name:          "returns unavailable without a database connection",
+			nilConn:       true,
+			setupMock:     func(_ sqlmock.Sqlmock) {},
+			shutdownPhase: PhaseRunning,
+			wantErr:       ErrDatabase,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("Error creating mock database: %v", err)
+			}
+			defer db.Close()
+
+			proxy := &ProxySQL{
+				settings:      newTestConfig(),
+				shutdownPhase: tt.shutdownPhase,
+			}
+			if !tt.nilConn {
+				proxy.conn = db
+			}
+
+			tt.setupMock(mock)
+
+			got, err := proxy.Metrics(t.Context())
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Metrics() error = %v, want %v", err, tt.wantErr)
+			}
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Metrics() = %#v, want %#v", got, tt.want)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations not met: %v", err)
 			}
 		})
 	}

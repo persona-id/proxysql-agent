@@ -56,6 +56,18 @@ type ProxySQL struct {
 	podWg             sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
 }
 
+type BackendConnectionMetric struct {
+	ConnectionsUsed int
+	Hostgroup       int
+	Port            int
+	Server          string
+}
+
+type Metrics struct {
+	BackendConnections  []BackendConnectionMetric
+	FrontendConnections int
+}
+
 func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 	settings := configs
 	address := settings.ProxySQL.Address
@@ -237,6 +249,53 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 	}
 
 	return 0, nil
+}
+
+func (p *ProxySQL) Metrics(ctx context.Context) (Metrics, error) {
+	if p.conn == nil {
+		return Metrics{}, ErrDatabase
+	}
+
+	if p.IsShuttingDown() {
+		return Metrics{}, ErrShuttingDown
+	}
+
+	frontendConnections, err := p.ProbeClients(ctx)
+	if err != nil {
+		return Metrics{}, err
+	}
+
+	rows, err := p.conn.QueryContext(
+		ctx,
+		`SELECT hostgroup, srv_host, srv_port, ConnUsed
+			FROM stats_mysql_connection_pool
+			ORDER BY hostgroup, srv_host, srv_port`,
+	)
+	if err != nil {
+		return Metrics{}, fmt.Errorf("failed to query backend connection pool stats: %w", err)
+	}
+	defer rows.Close()
+
+	backendConnections := []BackendConnectionMetric{}
+
+	for rows.Next() {
+		var metric BackendConnectionMetric
+
+		if err := rows.Scan(&metric.Hostgroup, &metric.Server, &metric.Port, &metric.ConnectionsUsed); err != nil {
+			return Metrics{}, fmt.Errorf("failed to scan backend connection pool stats: %w", err)
+		}
+
+		backendConnections = append(backendConnections, metric)
+	}
+
+	if err := rows.Err(); err != nil {
+		return Metrics{}, fmt.Errorf("failed to read backend connection pool stats: %w", err)
+	}
+
+	return Metrics{
+		BackendConnections:  backendConnections,
+		FrontendConnections: frontendConnections,
+	}, nil
 }
 
 // IsShuttingDown returns true if the ProxySQL instance is in shutdown process.

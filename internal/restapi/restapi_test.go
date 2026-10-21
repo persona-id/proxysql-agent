@@ -1,8 +1,10 @@
 package restapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +146,7 @@ func TestRouteRegistration(t *testing.T) {
 		{"/healthz/started", "GET"},
 		{"/healthz/ready", "GET"},
 		{"/healthz/live", "GET"},
+		{"/metrics", "GET"},
 		{"/shutdown", "POST"},
 	}
 
@@ -166,6 +169,93 @@ func TestRouteRegistration(t *testing.T) {
 			// If we get here without panic, check that we didn't get 404 (route not found)
 			if w.Code == 404 {
 				t.Errorf("Route %s %s not registered (got 404)", route.method, route.path)
+			}
+		})
+	}
+}
+
+type fakeMetricsReader struct {
+	err              error
+	metrics          proxysql.Metrics
+	requiresDeadline bool
+}
+
+func (f fakeMetricsReader) Metrics(ctx context.Context) (proxysql.Metrics, error) {
+	if deadline, ok := ctx.Deadline(); f.requiresDeadline && (!ok || time.Until(deadline) > metricsTimeout) {
+		return proxysql.Metrics{}, context.DeadlineExceeded
+	}
+
+	return f.metrics, f.err
+}
+
+func TestMetricsHandler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		reader     fakeMetricsReader
+		wantBody   string
+		wantStatus int
+		wantType   string
+	}{
+		{
+			name: "renders Prometheus gauges",
+			reader: fakeMetricsReader{
+				metrics: proxysql.Metrics{
+					BackendConnections: []proxysql.BackendConnectionMetric{
+						{ConnectionsUsed: 23, Hostgroup: 2, Port: 6033, Server: "primary.internal"},
+						{ConnectionsUsed: 11, Hostgroup: 2, Port: 6034, Server: "primary.internal"},
+						{ConnectionsUsed: 7, Hostgroup: 3, Port: 3306, Server: "replica\"\\\n.internal"},
+					},
+					FrontendConnections: 17,
+				},
+				requiresDeadline: true,
+			},
+			wantBody: strings.Join([]string{
+				"# HELP proxysql_frontend_connections_connected Current frontend client connections.",
+				"# TYPE proxysql_frontend_connections_connected gauge",
+				"proxysql_frontend_connections_connected 17",
+				"# HELP proxysql_backend_connections_used Current connections in use for a backend pool.",
+				"# TYPE proxysql_backend_connections_used gauge",
+				`proxysql_backend_connections_used{hostgroup="2",port="6033",server="primary.internal"} 23`,
+				`proxysql_backend_connections_used{hostgroup="2",port="6034",server="primary.internal"} 11`,
+				`proxysql_backend_connections_used{hostgroup="3",port="3306",server="replica\"\\\n.internal"} 7`,
+				"",
+			}, "\n"),
+			wantStatus: http.StatusOK,
+			wantType:   "text/plain; version=0.0.4; charset=utf-8",
+		},
+		{
+			name: "fails closed when collection fails",
+			reader: fakeMetricsReader{
+				err:              proxysql.ErrDatabase,
+				requiresDeadline: true,
+			},
+			wantBody:   "metrics unavailable\n",
+			wantStatus: http.StatusServiceUnavailable,
+			wantType:   "text/plain; charset=utf-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
+			response := httptest.NewRecorder()
+
+			metricsHandler(tt.reader).ServeHTTP(response, request)
+
+			if response.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", response.Code, tt.wantStatus)
+			}
+
+			if response.Body.String() != tt.wantBody {
+				t.Errorf("body = %q, want %q", response.Body.String(), tt.wantBody)
+			}
+
+			if contentType := response.Header().Get("Content-Type"); contentType != tt.wantType {
+				t.Errorf("Content-Type = %q, want %q", contentType, tt.wantType)
 			}
 		})
 	}

@@ -6,4 +6,5 @@ var (
 	ErrDatabase            = errors.New("general database error")
 	ErrCacheTimeout        = errors.New("timed out waiting for k8s caches to sync")
 	ErrProxySQLUnreachable = errors.New("timed out waiting for the ProxySQL admin interface")
+	ErrShuttingDown        = errors.New("proxysql is shutting down")
 )

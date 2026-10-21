@@ -78,7 +78,7 @@ func (p *ProxySQL) GetMissingCorePods(ctx context.Context) (int, error) {
 }
 
 // PreStopShutdown performs the complete graceful shutdown logic for HTTP handler.
-func (p *ProxySQL) PreStopShutdown() error {
+func (p *ProxySQL) PreStopShutdown(ctx context.Context) error {
 	var shutdownErr error
 
 	p.shutdownOnce.Do(func() {
@@ -89,8 +89,8 @@ func (p *ProxySQL) PreStopShutdown() error {
 			return
 		}
 
-		// Use a new context for graceful shutdown that's independent of the HTTP request
-		shutdownCtx := context.Background()
+		// Keep request values but ignore preStop cancellation and deadlines.
+		shutdownCtx := context.WithoutCancel(ctx)
 
 		err = p.gracefulShutdown(shutdownCtx)
 		if err != nil {
