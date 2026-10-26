@@ -1,8 +1,12 @@
 package restapi
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,7 +47,8 @@ func TestStartAPIServerConfiguration(t *testing.T) {
 
 			config := &configuration.Config{
 				API: struct {
-					Port int `mapstructure:"port"`
+					Port         int `mapstructure:"port"`
+					ShutdownPort int `mapstructure:"shutdown_port"`
 				}{
 					Port: tt.port,
 				},
@@ -107,7 +112,8 @@ func TestRouteRegistration(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -144,7 +150,6 @@ func TestRouteRegistration(t *testing.T) {
 		{"/healthz/started", "GET"},
 		{"/healthz/ready", "GET"},
 		{"/healthz/live", "GET"},
-		{"/shutdown", "POST"},
 	}
 
 	for _, route := range testRoutes {
@@ -191,7 +196,8 @@ func TestStartAPIPortFormatting(t *testing.T) {
 
 			config := &configuration.Config{
 				API: struct {
-					Port int `mapstructure:"port"`
+					Port         int `mapstructure:"port"`
+					ShutdownPort int `mapstructure:"shutdown_port"`
 				}{
 					Port: tc.port,
 				},
@@ -225,7 +231,8 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -275,7 +282,8 @@ func TestStartAPIGoroutineStarted(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
 		}{
 			Port: 0, // Use port 0 to let OS choose available port
 		},
@@ -310,7 +318,8 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -339,4 +348,234 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 
 	// Verify it's the correct type (server is already *http.Server, so just verify it's not nil)
 	// No need for type assertion since StartAPI already returns *http.Server
+}
+
+// newShutdownTestConfig returns a config with the given API ports.
+func newShutdownTestConfig(port, shutdownPort int) *configuration.Config {
+	return &configuration.Config{
+		API: struct {
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
+		}{
+			Port:         port,
+			ShutdownPort: shutdownPort,
+		},
+		Shutdown: struct {
+			DrainingFile    string `mapstructure:"draining_file"`
+			DrainTimeout    int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+		}{
+			DrainingFile:    "/tmp/draining",
+			DrainTimeout:    30,
+			ShutdownTimeout: 60,
+		},
+	}
+}
+
+// fakePreStopper records PreStopShutdown calls.
+type fakePreStopper struct {
+	err   error
+	calls atomic.Int32
+}
+
+func (f *fakePreStopper) PreStopShutdown() error {
+	f.calls.Add(1)
+
+	return f.err
+}
+
+var errFakeShutdown = errors.New("fake shutdown failure")
+
+// The probe server listens on the pod IP, so it must never route /shutdown (VLN-4882).
+func TestProbeServerDoesNotServeShutdown(t *testing.T) {
+	t.Parallel()
+
+	psql := &proxysql.ProxySQL{}
+	server := StartAPI(psql, newShutdownTestConfig(0, 0))
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete}
+
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(t.Context(), method, "/shutdown", nil)
+			w := httptest.NewRecorder()
+
+			server.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s /shutdown on probe server = %d, want %d", method, w.Code, http.StatusNotFound)
+			}
+
+			if psql.IsShuttingDown() {
+				t.Errorf("%s /shutdown on probe server started a shutdown", method)
+			}
+		})
+	}
+}
+
+func TestShutdownAddrIsLoopbackOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		shutdownPort int
+		wantAddr     string
+	}{
+		{name: "default port", shutdownPort: 8081, wantAddr: "127.0.0.1:8081"},
+		{name: "custom port", shutdownPort: 9191, wantAddr: "127.0.0.1:9191"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr := shutdownAddr(newShutdownTestConfig(8080, tt.shutdownPort))
+			if addr != tt.wantAddr {
+				t.Errorf("shutdownAddr() = %v, want %v", addr, tt.wantAddr)
+			}
+
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				t.Fatalf("SplitHostPort(%q) error: %v", addr, err)
+			}
+
+			if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+				t.Errorf("shutdownAddr() host = %q, want a loopback address", host)
+			}
+		})
+	}
+}
+
+func TestStartShutdownAPIServerConfiguration(t *testing.T) {
+	t.Parallel()
+
+	// Port 0 lets the OS pick a free loopback port.
+	config := newShutdownTestConfig(8080, 0)
+	server := StartShutdownAPI(&fakePreStopper{}, config)
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	if server.Addr != "127.0.0.1:0" {
+		t.Errorf("StartShutdownAPI() server.Addr = %v, want 127.0.0.1:0", server.Addr)
+	}
+
+	wantWriteTimeout := time.Duration(config.Shutdown.ShutdownTimeout+15) * time.Second
+	if server.WriteTimeout != wantWriteTimeout {
+		t.Errorf("StartShutdownAPI() WriteTimeout = %v, want %v", server.WriteTimeout, wantWriteTimeout)
+	}
+}
+
+func TestShutdownServerRouting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		method    string
+		path      string
+		err       error
+		wantCode  int
+		wantCalls int32
+	}{
+		{name: "POST triggers shutdown", method: http.MethodPost, path: "/shutdown", wantCode: http.StatusOK, wantCalls: 1},
+		{name: "POST reports shutdown failure", method: http.MethodPost, path: "/shutdown", err: errFakeShutdown, wantCode: http.StatusInternalServerError, wantCalls: 1},
+		{name: "GET is rejected", method: http.MethodGet, path: "/shutdown", wantCode: http.StatusMethodNotAllowed, wantCalls: 0},
+		{name: "PUT is rejected", method: http.MethodPut, path: "/shutdown", wantCode: http.StatusMethodNotAllowed, wantCalls: 0},
+		{name: "health probes are not served", method: http.MethodGet, path: "/healthz/live", wantCode: http.StatusNotFound, wantCalls: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stopper := &fakePreStopper{err: tt.err}
+			server := StartShutdownAPI(stopper, newShutdownTestConfig(8080, 0))
+
+			t.Cleanup(func() {
+				server.Close()
+			})
+
+			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
+			w := httptest.NewRecorder()
+
+			server.Handler.ServeHTTP(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("%s %s = %d, want %d", tt.method, tt.path, w.Code, tt.wantCode)
+			}
+
+			if got := stopper.calls.Load(); got != tt.wantCalls {
+				t.Errorf("PreStopShutdown() calls = %d, want %d", got, tt.wantCalls)
+			}
+		})
+	}
+}
+
+// End to end over the real loopback listener: POST /shutdown reaches PreStopShutdown.
+func TestShutdownServerOverLoopback(t *testing.T) {
+	t.Parallel()
+
+	// Reserve a free loopback port, then release it for the server to bind.
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to reserve a port: %v", err)
+	}
+
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("unexpected listener address type %T", ln.Addr())
+	}
+
+	port := tcpAddr.Port
+	ln.Close()
+
+	stopper := &fakePreStopper{}
+	server := StartShutdownAPI(stopper, newShutdownTestConfig(8080, port))
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	url := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) + "/shutdown"
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	var resp *http.Response
+
+	// The server starts in a goroutine; retry briefly until it is listening.
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, url, nil)
+		if reqErr != nil {
+			t.Fatalf("NewRequest error: %v", reqErr)
+		}
+
+		resp, err = client.Do(req)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err != nil {
+		t.Fatalf("POST %s error: %v", url, err)
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST %s = %d, want %d", url, resp.StatusCode, http.StatusOK)
+	}
+
+	if got := stopper.calls.Load(); got != 1 {
+		t.Errorf("PreStopShutdown() calls = %d, want 1", got)
+	}
 }

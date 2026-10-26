@@ -46,9 +46,8 @@ spec:
               name: proxysql-admin
           lifecycle:
             preStop:
-              httpGet:
-                path: /shutdown
-                port: 8080
+              exec:
+                command: ["wget", "-q", "-O", "-", "--post-data=", "http://127.0.0.1:8081/shutdown"]
           startupProbe:
             httpGet:
               path: /healthz/started

@@ -50,7 +50,7 @@ type ProxySQL struct {
 	shutdownOnce      sync.Once
 	shutdownPhase     ShutdownPhase
 	shutdownMu        sync.RWMutex
-	httpServer        *http.Server
+	httpServers       []*http.Server
 	retryDelay        time.Duration  // delay between podAdded retries; defaults to podAddedRetryDelay
 	drainTickInterval time.Duration  // interval for drain polling; 0 means use 2s default
 	podWg             sync.WaitGroup // tracks in-flight podAdded goroutines for clean shutdown
@@ -85,7 +85,7 @@ func (p *ProxySQL) New(configs *configuration.Config) (*ProxySQL, error) {
 		shutdownOnce:  sync.Once{},
 		shutdownPhase: PhaseRunning,
 		shutdownMu:    sync.RWMutex{},
-		httpServer:    nil,
+		httpServers:   nil,
 		retryDelay:    podAddedRetryDelay,
 		podWg:         sync.WaitGroup{},
 	}, nil
@@ -247,36 +247,39 @@ func (p *ProxySQL) IsShuttingDown() bool {
 	return p.shutdownPhase != PhaseRunning
 }
 
-// SetHTTPServer sets the HTTP server reference for graceful shutdown.
-func (p *ProxySQL) SetHTTPServer(server *http.Server) {
+// SetHTTPServers sets the HTTP servers (probe and loopback shutdown) to stop during graceful shutdown.
+func (p *ProxySQL) SetHTTPServers(servers ...*http.Server) {
 	p.shutdownMu.Lock()
 	defer p.shutdownMu.Unlock()
 
-	p.httpServer = server
+	p.httpServers = servers
 }
 
-// shutdownHTTPServer gracefully stops the HTTP server if one is set.
+// shutdownHTTPServer gracefully stops the HTTP servers, if any are set.
 // It must be called from outside any active HTTP handler to avoid deadlocking:
 // httpServer.Shutdown waits for in-flight requests to complete, so calling it
 // from within an HTTP handler would wait forever for itself.
 func (p *ProxySQL) shutdownHTTPServer() {
 	p.shutdownMu.RLock()
-	httpServer := p.httpServer
+	httpServers := p.httpServers
 	p.shutdownMu.RUnlock()
 
-	if httpServer == nil {
-		return
-	}
+	for _, httpServer := range httpServers {
+		if httpServer == nil {
+			continue
+		}
 
-	slog.Info("shutting down HTTP server")
+		slog.Info("shutting down HTTP server", slog.String("address", httpServer.Addr))
 
-	httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
-	defer httpCancel()
+		httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:mnd
 
-	if err := httpServer.Shutdown(httpCtx); err != nil {
-		slog.Error("failed to shutdown HTTP server", slog.Any("error", err))
-	} else {
-		slog.Info("HTTP server shutdown completed")
+		if err := httpServer.Shutdown(httpCtx); err != nil {
+			slog.Error("failed to shutdown HTTP server", slog.String("address", httpServer.Addr), slog.Any("error", err))
+		} else {
+			slog.Info("HTTP server shutdown completed", slog.String("address", httpServer.Addr))
+		}
+
+		httpCancel()
 	}
 }
 

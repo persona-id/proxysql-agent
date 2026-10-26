@@ -25,6 +25,8 @@ var (
 	ErrNegativeCoreInterval      = errors.New("core.interval cannot be < 0")
 	ErrNegativeSatelliteInterval = errors.New("satellite.interval cannot be < 0")
 	ErrMissingPort               = errors.New("missing port in address")
+	ErrInvalidShutdownPort       = errors.New("api.shutdown_port must be between 1 and 65535")
+	ErrShutdownPortConflict      = errors.New("api.shutdown_port must differ from api.port")
 )
 
 type Config struct {
@@ -55,7 +57,8 @@ type Config struct {
 	} `mapstructure:"satellite"`
 	StartDelay int `mapstructure:"start_delay"`
 	API        struct {
-		Port int `mapstructure:"port"`
+		Port         int `mapstructure:"port"`
+		ShutdownPort int `mapstructure:"shutdown_port"`
 	} `mapstructure:"api"`
 	Shutdown struct {
 		DrainingFile    string `mapstructure:"draining_file"`
@@ -180,7 +183,8 @@ func setupDefaults() {
 
 	viper.GetViper().SetDefault("satellite.interval", 10) //nolint:mnd
 
-	viper.GetViper().SetDefault("api.port", 8080) //nolint:mnd
+	viper.GetViper().SetDefault("api.port", 8080)          //nolint:mnd
+	viper.GetViper().SetDefault("api.shutdown_port", 8081) //nolint:mnd
 	viper.GetViper().SetDefault("shutdown.draining_file", "/var/lib/proxysql/draining")
 
 	viper.GetViper().SetDefault("shutdown.drain_timeout", 30)    //nolint:mnd
@@ -209,7 +213,8 @@ func setupFlags() error {
 
 	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop") //nolint:mnd
 
-	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
+	pflag.Int("api.port", 8080, "port for the HTTP API server (health probes; listens on all interfaces)")          //nolint:mnd
+	pflag.Int("api.shutdown_port", 8081, "port for the preStop /shutdown endpoint; always bound to 127.0.0.1 only") //nolint:mnd
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
 	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL") //nolint:mnd
 	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")           //nolint:mnd
@@ -254,6 +259,17 @@ func validateConfig() error {
 
 	if sinterval := viper.GetViper().GetInt("satellite.interval"); sinterval < 0 {
 		return ErrNegativeSatelliteInterval
+	}
+
+	const maxPort = 65535
+
+	shutdownPort := viper.GetViper().GetInt("api.shutdown_port")
+	if shutdownPort <= 0 || shutdownPort > maxPort {
+		return ErrInvalidShutdownPort
+	}
+
+	if shutdownPort == viper.GetViper().GetInt("api.port") {
+		return ErrShutdownPortConflict
 	}
 
 	return nil
@@ -350,6 +366,7 @@ func logDebugInfo(settings *Config) {
 			slog.String("core.podselector.app", settings.Core.PodSelector.App),
 			slog.String("core.podselector.component", settings.Core.PodSelector.Component),
 			slog.Int("api.port", settings.API.Port),
+			slog.Int("api.shutdown_port", settings.API.ShutdownPort),
 			slog.String("shutdown.draining_file", settings.Shutdown.DrainingFile),
 		),
 	)

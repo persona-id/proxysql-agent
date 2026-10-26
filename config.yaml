@@ -63,8 +63,12 @@ satellite:
 
 # HTTP API configuration
 api:
-  # Port for the HTTP API server; defaults to 8080
+  # Port for the health probe server (/healthz/*). Listens on all interfaces so the
+  # kubelet can reach it on the pod IP; defaults to 8080
   port: 8080
+  # Port for the preStop POST /shutdown endpoint. Always bound to 127.0.0.1, so only
+  # containers in the same pod can reach it; must differ from port. Defaults to 8081
+  shutdown_port: 8081
 
 # Graceful shutdown configuration
 shutdown:

@@ -60,7 +60,7 @@ func TestGetMissingCorePods(t *testing.T) {
 				shutdownOnce:  sync.Once{},
 				shutdownMu:    sync.RWMutex{},
 				shutdownPhase: PhaseRunning,
-				httpServer:    nil,
+				httpServers:   nil,
 			}
 
 			// Setup the mock
@@ -111,7 +111,7 @@ func TestSatelliteResync(t *testing.T) {
 	p := &ProxySQL{
 		clientset:     nil,
 		conn:          db,
-		httpServer:    nil,
+		httpServers:   nil,
 		settings:      newTestConfig(),
 		shutdownMu:    sync.RWMutex{},
 		shutdownOnce:  sync.Once{},
@@ -184,7 +184,7 @@ func TestGracefulShutdownDoesNotCloseHTTPServer(t *testing.T) {
 		settings:      cfg,
 		shutdownPhase: PhaseDraining,
 		shutdownMu:    sync.RWMutex{},
-		httpServer:    server,
+		httpServers:   []*http.Server{server},
 	}
 
 	if err := proxy.gracefulShutdown(context.Background()); err != nil {
@@ -416,6 +416,57 @@ func TestDumpQueryDigests(t *testing.T) {
 			mockErr := mock.ExpectationsWereMet()
 			if mockErr != nil {
 				t.Errorf("SQL expectations not met: %v", mockErr)
+			}
+		})
+	}
+}
+
+func TestShutdownHTTPServerStopsAllServers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		servers int
+	}{
+		{name: "no servers", servers: 0},
+		{name: "probe server only", servers: 1},
+		{name: "probe and loopback shutdown servers", servers: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			servers := make([]*http.Server, 0, tt.servers)
+			addrs := make([]string, 0, tt.servers)
+
+			for range tt.servers {
+				ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatalf("failed to create listener: %v", err)
+				}
+
+				server := &http.Server{ReadHeaderTimeout: 5 * time.Second}
+
+				go func() { _ = server.Serve(ln) }()
+
+				t.Cleanup(func() { server.Close() })
+
+				servers = append(servers, server)
+				addrs = append(addrs, ln.Addr().String())
+			}
+
+			proxy := &ProxySQL{shutdownMu: sync.RWMutex{}}
+			proxy.SetHTTPServers(append(servers, nil)...)
+
+			proxy.shutdownHTTPServer()
+
+			for _, addr := range addrs {
+				conn, dialErr := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", addr)
+				if dialErr == nil {
+					conn.Close()
+					t.Errorf("server at %s still accepting connections after shutdownHTTPServer()", addr)
+				}
 			}
 		})
 	}
