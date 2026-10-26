@@ -5,25 +5,71 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/persona-id/proxysql-agent/internal/configuration"
 	"github.com/persona-id/proxysql-agent/internal/proxysql"
 )
 
-// StartAPI starts the HTTP server for the ProxySQL agent.
-// It registers the necessary handlers for health checks and starts listening on the specified port.
+// shutdownListenHost is the only interface the shutdown listener binds to. It is
+// deliberately not configurable: the /shutdown endpoint irreversibly drains and
+// stops ProxySQL, so it must never be reachable on the pod IP (VLN-4882).
+const shutdownListenHost = "127.0.0.1"
+
+// StartAPI starts the HTTP server for the kubelet health probes.
+// It listens on all interfaces (the kubelet probes the pod IP), so it must only
+// serve read-only endpoints. The shutdown endpoint lives on the loopback-only
+// server started by StartShutdownAPI.
 // Returns the server instance for graceful shutdown.
 func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz/started", startupHandler(p, settings))
 	mux.HandleFunc("/healthz/ready", readinessHandler(p, settings))
 	mux.HandleFunc("/healthz/live", livenessHandler(p, settings))
-	mux.HandleFunc("/shutdown", preStopHandler(p, settings))
 
-	port := fmt.Sprintf(":%d", settings.API.Port)
+	server := newServer(fmt.Sprintf(":%d", settings.API.Port), mux, settings)
 
+	slog.Info("Starting HTTP server", slog.String("address", server.Addr))
+
+	go serve(server)
+
+	return server
+}
+
+// preStopper is the subset of *proxysql.ProxySQL used by the shutdown server.
+type preStopper interface {
+	PreStopShutdown() error
+}
+
+// StartShutdownAPI starts the loopback-only HTTP server that serves POST /shutdown,
+// used by the Kubernetes preStop hook (an exec hook that calls
+// http://127.0.0.1:<api.shutdown_port>/shutdown from inside the pod).
+// Because it is bound to 127.0.0.1 it is only reachable from containers in the
+// same pod network namespace, never from other pods.
+// Returns the server instance for graceful shutdown.
+func StartShutdownAPI(p preStopper, settings *configuration.Config) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /shutdown", preStopHandler(p))
+
+	server := newServer(shutdownAddr(settings), mux, settings)
+
+	slog.Info("Starting loopback shutdown HTTP server", slog.String("address", server.Addr))
+
+	go serve(server)
+
+	return server
+}
+
+// shutdownAddr returns the loopback address the shutdown server listens on.
+func shutdownAddr(settings *configuration.Config) string {
+	return net.JoinHostPort(shutdownListenHost, strconv.Itoa(settings.API.ShutdownPort))
+}
+
+// newServer builds an http.Server with the agent's standard timeouts.
+func newServer(addr string, handler http.Handler, settings *configuration.Config) *http.Server {
 	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
 	// blocks for the full graceful shutdown duration before returning a response.
 	// The extra headroom covers work outside the shutdown context timeout:
@@ -32,28 +78,26 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
 
 	// Create a server with reasonable timeouts
-	server := &http.Server{
-		Addr:              port,
-		Handler:           mux,
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
 		ReadTimeout:       10 * time.Second, //nolint:mnd
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       30 * time.Second, //nolint:mnd
 		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
 	}
+}
 
-	slog.Info("Starting HTTP server", slog.String("port", port))
-
-	go func() {
-		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
-		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
-		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("Error starting the HTTP server", slog.Any("err", err))
-			panic(err)
-		}
-	}()
-
-	return server
+// serve runs ListenAndServe and panics if the listener cannot be started.
+func serve(server *http.Server) {
+	// Plain HTTP is intentional: the probe server only exposes read-only health
+	// endpoints for the kubelet, and the shutdown server is bound to loopback.
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+	err := server.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("Error starting the HTTP server", slog.String("address", server.Addr), slog.Any("err", err))
+		panic(err)
+	}
 }
 
 // livenessHandler is an HTTP handler function that handles liveness checks for the ProxySQL agent.
@@ -228,7 +272,8 @@ func startupHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.Handl
 }
 
 // preStopHandler is an HTTP request handler function that handles the prestop shutdown endpoint.
-func preStopHandler(psql *proxysql.ProxySQL, _ *configuration.Config) http.HandlerFunc {
+// It is only registered on the loopback shutdown server (see StartShutdownAPI).
+func preStopHandler(psql preStopper) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		err := psql.PreStopShutdown()
 		if err != nil {

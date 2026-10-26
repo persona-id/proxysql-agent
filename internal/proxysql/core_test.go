@@ -108,7 +108,7 @@ func TestPodUpdated(t *testing.T) {
 				shutdownOnce:  sync.Once{},
 				shutdownPhase: PhaseRunning,
 				shutdownMu:    sync.RWMutex{},
-				httpServer:    nil,
+				httpServers:   nil,
 			}
 
 			oldpod := &v1.Pod{
@@ -192,7 +192,7 @@ func TestPodAdded(t *testing.T) {
 				shutdownOnce:  sync.Once{},
 				shutdownPhase: PhaseRunning,
 				shutdownMu:    sync.RWMutex{},
-				httpServer:    nil,
+				httpServers:   nil,
 			}
 
 			tc.setupMock(mock)
@@ -389,7 +389,7 @@ func TestAddPodWhenReady(t *testing.T) {
 				shutdownOnce:  sync.Once{},
 				shutdownPhase: PhaseRunning,
 				shutdownMu:    sync.RWMutex{},
-				httpServer:    nil,
+				httpServers:   nil,
 				retryDelay:    0, // no delay in tests
 			}
 
@@ -1151,7 +1151,7 @@ func setupPodTest(t *testing.T, namespace, component string) (*ProxySQL, sqlmock
 		shutdownOnce:  sync.Once{},
 		shutdownPhase: PhaseRunning,
 		shutdownMu:    sync.RWMutex{},
-		httpServer:    nil,
+		httpServers:   nil,
 	}
 
 	pod := &v1.Pod{

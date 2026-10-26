@@ -65,9 +65,10 @@ func main() {
 	// so it will block the process from exiting
 	switch settings.RunMode {
 	case "core":
-		// start the http api
+		// start the http api (probes on all interfaces, /shutdown on loopback only)
 		server := restapi.StartAPI(psql, settings)
-		psql.SetHTTPServer(server)
+		shutdownServer := restapi.StartShutdownAPI(psql, settings)
+		psql.SetHTTPServers(server, shutdownServer)
 
 		// fire off the core loop
 		err := psql.Core(ctx)
@@ -79,9 +80,10 @@ func main() {
 		slog.Info("main: core loop completed, process exiting")
 
 	case "satellite":
-		// start the http api
+		// start the http api (probes on all interfaces, /shutdown on loopback only)
 		server := restapi.StartAPI(psql, settings)
-		psql.SetHTTPServer(server)
+		shutdownServer := restapi.StartShutdownAPI(psql, settings)
+		psql.SetHTTPServers(server, shutdownServer)
 
 		// fire off the satellite loop
 		err := psql.Satellite(ctx)

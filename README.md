@@ -51,14 +51,32 @@ On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:60
 
 ## HTTP API
 
-The agent exposes several HTTP endpoints (default port 8080):
+The agent runs two HTTP listeners.
+
+The probe listener (`api.port`, default 8080) listens on all interfaces so the kubelet can reach it on the pod IP. It only serves read-only health checks:
 
 - **`/healthz/started`** - Startup probe (simple ping to ProxySQL admin interface)
 - **`/healthz/ready`** - Readiness probe (comprehensive health checks, returns 503 when draining)
 - **`/healthz/live`** - Liveness probe (health checks, remains healthy during graceful shutdown)
-- **`/shutdown`** - Graceful shutdown endpoint for `container.lifecycle.preStop.httpGet` hooks
 
 All health endpoints return JSON responses with detailed status information including backend server states, connection counts, and draining status.
+
+The shutdown listener (`api.shutdown_port`, default 8081) is always bound to `127.0.0.1`, so it is reachable only from containers in the same pod:
+
+- **`POST /shutdown`** - Starts the graceful drain and `PROXYSQL SHUTDOWN`, and responds once it has finished. Any other method returns 405.
+
+### preStop hook
+
+`/shutdown` is not on the pod IP, so an `httpGet` preStop hook (which the kubelet sends to the pod IP) cannot reach it. Use an `exec` hook on the `proxysql` container that POSTs to the loopback listener. The `proxysql/proxysql` image ships `wget`:
+
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["wget", "-q", "-O", "-", "--post-data=", "http://127.0.0.1:8081/shutdown"]
+```
+
+Keep the hook on the `proxysql` container. When the agent runs as a native sidecar, the kubelet runs the agent container's own preStop only after `proxysql` has exited, which is too late to drain it.
 
 ## Signal Handling
 
@@ -81,7 +99,7 @@ Key configuration options include:
 - ProxySQL admin interface connection details
 - Run mode (`core`, `satellite`, or `dump`)
 - Kubernetes pod selector for cluster discovery
-- HTTP API port and settings
+- HTTP API ports (`api.port` for probes, `api.shutdown_port` for the loopback-only `/shutdown` endpoint)
 - Logging configuration (level, format, structured logging)
 - Graceful shutdown timeouts
 

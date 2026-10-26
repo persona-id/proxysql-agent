@@ -70,6 +70,26 @@ func TestValidations(t *testing.T) {
 			wantErr: ErrNegativeSatelliteInterval,
 			args:    []string{"cmd", "--satellite.interval=-1"},
 		},
+		{
+			name:    "zero api.shutdown_port",
+			wantErr: ErrInvalidShutdownPort,
+			args:    []string{"cmd", "--api.shutdown_port=0"},
+		},
+		{
+			name:    "out of range api.shutdown_port",
+			wantErr: ErrInvalidShutdownPort,
+			args:    []string{"cmd", "--api.shutdown_port=65536"},
+		},
+		{
+			name:    "api.shutdown_port equal to api.port",
+			wantErr: ErrShutdownPortConflict,
+			args:    []string{"cmd", "--api.port=9000", "--api.shutdown_port=9000"},
+		},
+		{
+			name:    "custom api.shutdown_port",
+			wantErr: nil,
+			args:    []string{"cmd", "--api.shutdown_port=9191"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -129,6 +149,8 @@ func TestDefaults(t *testing.T) {
 		{"Core.PodSelector.App", "proxysql", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "core", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 10, config.Satellite.Interval},
+		{"API.Port", 8080, config.API.Port},
+		{"API.ShutdownPort", 8081, config.API.ShutdownPort},
 	}
 
 	for _, tt := range tests {
@@ -728,7 +750,8 @@ func TestLogDebugInfo(t *testing.T) {
 			Interval: 15,
 		},
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port         int `mapstructure:"port"`
+			ShutdownPort int `mapstructure:"shutdown_port"`
 		}{
 			Port: 8080,
 		},

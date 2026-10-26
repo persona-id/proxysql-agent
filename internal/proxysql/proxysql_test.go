@@ -33,7 +33,7 @@ func TestPing(t *testing.T) {
 		shutdownOnce:  sync.Once{},
 		shutdownPhase: PhaseRunning,
 		shutdownMu:    sync.RWMutex{},
-		httpServer:    nil,
+		httpServers:   nil,
 	}
 
 	err = proxy.Ping(context.Background())

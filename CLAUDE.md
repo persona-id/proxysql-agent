@@ -56,7 +56,8 @@ Uses `golangci-lint-v2` - note the `-v2` suffix is required for this project's t
 
 4. **REST API** (`internal/restapi/`)
    - HTTP server for Kubernetes health checks and lifecycle management
-   - Endpoints: `/healthz/started`, `/healthz/ready`, `/healthz/live`, `/shutdown`
+   - Probe server on `api.port` (all interfaces): `/healthz/started`, `/healthz/ready`, `/healthz/live`
+   - Shutdown server on `127.0.0.1:api.shutdown_port` (loopback only): `POST /shutdown`
    - Implements graceful shutdown via prestop hooks
 
 ### Operational Modes
