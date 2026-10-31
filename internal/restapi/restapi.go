@@ -12,18 +12,31 @@ import (
 	"github.com/persona-id/proxysql-agent/internal/proxysql"
 )
 
-// StartAPI starts the HTTP server for the ProxySQL agent.
-// It registers the necessary handlers for health checks and starts listening on the specified port.
+// StartAPI starts the HTTP server that serves the Kubernetes health check endpoints on
+// all interfaces, since kubelet probes originate from the node.
 // Returns the server instance for graceful shutdown.
 func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz/started", startupHandler(p, settings))
 	mux.HandleFunc("/healthz/ready", readinessHandler(p, settings))
 	mux.HandleFunc("/healthz/live", livenessHandler(p, settings))
-	mux.HandleFunc("/shutdown", preStopHandler(p, settings))
 
-	port := fmt.Sprintf(":%d", settings.API.Port)
+	return serve(newServer(fmt.Sprintf(":%d", settings.API.Port), mux, settings))
+}
 
+// StartShutdownAPI starts the HTTP server that serves /shutdown. It binds to
+// api.shutdown_address, which configuration validation restricts to loopback, so only
+// containers sharing the pod's network namespace (the preStop exec hook) can drain ProxySQL.
+// Returns the server instance for graceful shutdown.
+func StartShutdownAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /shutdown", preStopHandler(p, settings))
+	mux.HandleFunc("POST /shutdown", preStopHandler(p, settings))
+
+	return serve(newServer(settings.API.ShutdownAddress, mux, settings))
+}
+
+func newServer(addr string, handler http.Handler, settings *configuration.Config) *http.Server {
 	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
 	// blocks for the full graceful shutdown duration before returning a response.
 	// The extra headroom covers work outside the shutdown context timeout:
@@ -31,24 +44,25 @@ func StartAPI(p *proxysql.ProxySQL, settings *configuration.Config) *http.Server
 	const shutdownHeadroom = 15
 	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
 
-	// Create a server with reasonable timeouts
-	server := &http.Server{
-		Addr:              port,
-		Handler:           mux,
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
 		ReadTimeout:       10 * time.Second, //nolint:mnd
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       30 * time.Second, //nolint:mnd
 		ReadHeaderTimeout: 5 * time.Second,  //nolint:mnd
 	}
+}
 
-	slog.Info("Starting HTTP server", slog.String("port", port))
+func serve(server *http.Server) *http.Server {
+	slog.Info("Starting HTTP server", slog.String("address", server.Addr))
 
 	go func() {
-		// disabling this semgrep rule here because it's an internal API only accessible inside the pod itself
+		// plain HTTP inside the pod: probes come from the kubelet and /shutdown is loopback-only
 		// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
 		err := server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("Error starting the HTTP server", slog.Any("err", err))
+			slog.Error("Error starting the HTTP server", slog.String("address", server.Addr), slog.Any("err", err))
 			panic(err)
 		}
 	}()

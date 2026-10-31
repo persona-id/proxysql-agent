@@ -60,7 +60,7 @@ func TestGetMissingCorePods(t *testing.T) {
 				shutdownOnce:  sync.Once{},
 				shutdownMu:    sync.RWMutex{},
 				shutdownPhase: PhaseRunning,
-				httpServer:    nil,
+				httpServers:   nil,
 			}
 
 			// Setup the mock
@@ -111,7 +111,7 @@ func TestSatelliteResync(t *testing.T) {
 	p := &ProxySQL{
 		clientset:     nil,
 		conn:          db,
-		httpServer:    nil,
+		httpServers:   nil,
 		settings:      newTestConfig(),
 		shutdownMu:    sync.RWMutex{},
 		shutdownOnce:  sync.Once{},
@@ -184,7 +184,7 @@ func TestGracefulShutdownDoesNotCloseHTTPServer(t *testing.T) {
 		settings:      cfg,
 		shutdownPhase: PhaseDraining,
 		shutdownMu:    sync.RWMutex{},
-		httpServer:    server,
+		httpServers:   []*http.Server{server},
 	}
 
 	if err := proxy.gracefulShutdown(context.Background()); err != nil {

@@ -70,6 +70,46 @@ func TestValidations(t *testing.T) {
 			wantErr: ErrNegativeSatelliteInterval,
 			args:    []string{"cmd", "--satellite.interval=-1"},
 		},
+		{
+			name:    "loopback ipv4 api.shutdown_address",
+			wantErr: nil,
+			args:    []string{"cmd", "--api.shutdown_address=127.0.0.1:9000"},
+		},
+		{
+			name:    "loopback ipv6 api.shutdown_address",
+			wantErr: nil,
+			args:    []string{"cmd", "--api.shutdown_address=[::1]:9000"},
+		},
+		{
+			name:    "localhost api.shutdown_address",
+			wantErr: nil,
+			args:    []string{"cmd", "--api.shutdown_address=localhost:9000"},
+		},
+		{
+			name:    "all interfaces api.shutdown_address",
+			wantErr: ErrNonLoopbackShutdown,
+			args:    []string{"cmd", "--api.shutdown_address=:8081"},
+		},
+		{
+			name:    "unspecified ip api.shutdown_address",
+			wantErr: ErrNonLoopbackShutdown,
+			args:    []string{"cmd", "--api.shutdown_address=0.0.0.0:8081"},
+		},
+		{
+			name:    "pod ip api.shutdown_address",
+			wantErr: ErrNonLoopbackShutdown,
+			args:    []string{"cmd", "--api.shutdown_address=10.0.0.5:8081"},
+		},
+		{
+			name:    "hostname api.shutdown_address",
+			wantErr: ErrNonLoopbackShutdown,
+			args:    []string{"cmd", "--api.shutdown_address=proxysql:8081"},
+		},
+		{
+			name:    "missing port api.shutdown_address",
+			wantErr: ErrNonLoopbackShutdown,
+			args:    []string{"cmd", "--api.shutdown_address=127.0.0.1"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -681,6 +721,10 @@ func TestConfigureAPIDefaults(t *testing.T) {
 		t.Errorf("API.Port = %v, want 8080", config.API.Port)
 	}
 
+	if config.API.ShutdownAddress != "127.0.0.1:8081" {
+		t.Errorf("API.ShutdownAddress = %v, want 127.0.0.1:8081", config.API.ShutdownAddress)
+	}
+
 	if config.Shutdown.DrainingFile != "/var/lib/proxysql/draining" {
 		t.Errorf("Shutdown.DrainingFile = %v, want /var/lib/proxysql/draining", config.Shutdown.DrainingFile)
 	}
@@ -728,7 +772,8 @@ func TestLogDebugInfo(t *testing.T) {
 			Interval: 15,
 		},
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port            int    `mapstructure:"port"`
+			ShutdownAddress string `mapstructure:"shutdown_address"`
 		}{
 			Port: 8080,
 		},
