@@ -43,7 +43,8 @@ func TestStartAPIServerConfiguration(t *testing.T) {
 
 			config := &configuration.Config{
 				API: struct {
-					Port int `mapstructure:"port"`
+					Port            int    `mapstructure:"port"`
+					ShutdownAddress string `mapstructure:"shutdown_address"`
 				}{
 					Port: tt.port,
 				},
@@ -107,7 +108,8 @@ func TestRouteRegistration(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port            int    `mapstructure:"port"`
+			ShutdownAddress string `mapstructure:"shutdown_address"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -144,7 +146,6 @@ func TestRouteRegistration(t *testing.T) {
 		{"/healthz/started", "GET"},
 		{"/healthz/ready", "GET"},
 		{"/healthz/live", "GET"},
-		{"/shutdown", "POST"},
 	}
 
 	for _, route := range testRoutes {
@@ -191,7 +192,8 @@ func TestStartAPIPortFormatting(t *testing.T) {
 
 			config := &configuration.Config{
 				API: struct {
-					Port int `mapstructure:"port"`
+					Port            int    `mapstructure:"port"`
+					ShutdownAddress string `mapstructure:"shutdown_address"`
 				}{
 					Port: tc.port,
 				},
@@ -225,7 +227,8 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port            int    `mapstructure:"port"`
+			ShutdownAddress string `mapstructure:"shutdown_address"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -275,7 +278,8 @@ func TestStartAPIGoroutineStarted(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port            int    `mapstructure:"port"`
+			ShutdownAddress string `mapstructure:"shutdown_address"`
 		}{
 			Port: 0, // Use port 0 to let OS choose available port
 		},
@@ -310,7 +314,8 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 
 	config := &configuration.Config{
 		API: struct {
-			Port int `mapstructure:"port"`
+			Port            int    `mapstructure:"port"`
+			ShutdownAddress string `mapstructure:"shutdown_address"`
 		}{
 			Port: 0, // Use port 0 to avoid conflicts
 		},
@@ -339,4 +344,99 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 
 	// Verify it's the correct type (server is already *http.Server, so just verify it's not nil)
 	// No need for type assertion since StartAPI already returns *http.Server
+}
+
+func newShutdownTestConfig() *configuration.Config {
+	config := &configuration.Config{}
+	config.API.Port = 0
+	config.API.ShutdownAddress = "127.0.0.1:0"
+	config.Shutdown.DrainingFile = "/tmp/draining"
+	config.Shutdown.DrainTimeout = 30
+	config.Shutdown.ShutdownTimeout = 60
+
+	return config
+}
+
+func TestProbeServerDoesNotServeShutdown(t *testing.T) {
+	t.Parallel()
+
+	server := StartAPI(&proxysql.ProxySQL{}, newShutdownTestConfig())
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(t.Context(), method, "/shutdown", nil)
+			w := httptest.NewRecorder()
+
+			server.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s /shutdown on probe server = %d, want %d", method, w.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+func TestStartShutdownAPI(t *testing.T) {
+	t.Parallel()
+
+	config := newShutdownTestConfig()
+	config.API.ShutdownAddress = "127.0.0.1:18081"
+
+	server := StartShutdownAPI(&proxysql.ProxySQL{}, config)
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	if server.Addr != "127.0.0.1:18081" {
+		t.Errorf("StartShutdownAPI() Addr = %v, want 127.0.0.1:18081", server.Addr)
+	}
+
+	expectedWriteTimeout := time.Duration(config.Shutdown.ShutdownTimeout+15) * time.Second
+	if server.WriteTimeout != expectedWriteTimeout {
+		t.Errorf("StartShutdownAPI() WriteTimeout = %v, want %v", server.WriteTimeout, expectedWriteTimeout)
+	}
+}
+
+func TestShutdownServerRoutes(t *testing.T) {
+	t.Parallel()
+
+	server := StartShutdownAPI(&proxysql.ProxySQL{}, newShutdownTestConfig())
+
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		wantCode int
+	}{
+		{"healthz not served", http.MethodGet, "/healthz/ready", http.StatusNotFound},
+		{"unknown path", http.MethodGet, "/", http.StatusNotFound},
+		{"delete not allowed", http.MethodDelete, "/shutdown", http.StatusMethodNotAllowed},
+		{"put not allowed", http.MethodPut, "/shutdown", http.StatusMethodNotAllowed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
+			w := httptest.NewRecorder()
+
+			server.Handler.ServeHTTP(w, req)
+
+			if w.Code != tt.wantCode {
+				t.Errorf("%s %s = %d, want %d", tt.method, tt.path, w.Code, tt.wantCode)
+			}
+		})
+	}
 }

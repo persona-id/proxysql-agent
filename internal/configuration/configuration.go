@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -25,6 +26,7 @@ var (
 	ErrNegativeCoreInterval      = errors.New("core.interval cannot be < 0")
 	ErrNegativeSatelliteInterval = errors.New("satellite.interval cannot be < 0")
 	ErrMissingPort               = errors.New("missing port in address")
+	ErrNonLoopbackShutdown       = errors.New("api.shutdown_address must be a loopback host:port")
 )
 
 type Config struct {
@@ -55,7 +57,8 @@ type Config struct {
 	} `mapstructure:"satellite"`
 	StartDelay int `mapstructure:"start_delay"`
 	API        struct {
-		Port int `mapstructure:"port"`
+		Port            int    `mapstructure:"port"`
+		ShutdownAddress string `mapstructure:"shutdown_address"`
 	} `mapstructure:"api"`
 	Shutdown struct {
 		DrainingFile    string `mapstructure:"draining_file"`
@@ -181,6 +184,7 @@ func setupDefaults() {
 	viper.GetViper().SetDefault("satellite.interval", 10) //nolint:mnd
 
 	viper.GetViper().SetDefault("api.port", 8080) //nolint:mnd
+	viper.GetViper().SetDefault("api.shutdown_address", "127.0.0.1:8081")
 	viper.GetViper().SetDefault("shutdown.draining_file", "/var/lib/proxysql/draining")
 
 	viper.GetViper().SetDefault("shutdown.drain_timeout", 30)    //nolint:mnd
@@ -210,6 +214,7 @@ func setupFlags() error {
 	pflag.Int("satellite.interval", 10, "seconds to sleep in the satellite clustering loop") //nolint:mnd
 
 	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
+	pflag.String("api.shutdown_address", "127.0.0.1:8081", "loopback host:port for the /shutdown endpoint")
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
 	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL") //nolint:mnd
 	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")           //nolint:mnd
@@ -256,7 +261,27 @@ func validateConfig() error {
 		return ErrNegativeSatelliteInterval
 	}
 
+	if addr := viper.GetViper().GetString("api.shutdown_address"); !isLoopbackAddress(addr) {
+		return fmt.Errorf("%w: %q", ErrNonLoopbackShutdown, addr)
+	}
+
 	return nil
+}
+
+// isLoopbackAddress reports whether addr is a host:port whose host is a loopback IP or localhost.
+func isLoopbackAddress(addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // setupLogger sets up the slog logger as the default logger.
@@ -350,6 +375,7 @@ func logDebugInfo(settings *Config) {
 			slog.String("core.podselector.app", settings.Core.PodSelector.App),
 			slog.String("core.podselector.component", settings.Core.PodSelector.Component),
 			slog.Int("api.port", settings.API.Port),
+			slog.String("api.shutdown_address", settings.API.ShutdownAddress),
 			slog.String("shutdown.draining_file", settings.Shutdown.DrainingFile),
 		),
 	)
