@@ -63,8 +63,11 @@ satellite:
 
 # HTTP API configuration
 api:
-  # Port for the HTTP API server; defaults to 8080
+  # Port for the health check HTTP server; defaults to 8080
   port: 8080
+  # Loopback host:port for the /shutdown endpoint used by the preStop hook; must be a
+  # loopback address. Defaults to 127.0.0.1:8081
+  shutdown_address: "127.0.0.1:8081"
 
 # Graceful shutdown configuration
 shutdown:
