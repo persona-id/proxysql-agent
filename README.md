@@ -51,12 +51,22 @@ On boot, the agent will connect to the ProxySQL admin interface on `127.0.0.1:60
 
 ## HTTP API
 
-The agent exposes several HTTP endpoints (default port 8080):
+The agent exposes the health endpoints on all interfaces (default port 8080), because kubelet probes come from the node:
 
 - **`/healthz/started`** - Startup probe (simple ping to ProxySQL admin interface)
 - **`/healthz/ready`** - Readiness probe (comprehensive health checks, returns 503 when draining)
 - **`/healthz/live`** - Liveness probe (health checks, remains healthy during graceful shutdown)
-- **`/shutdown`** - Graceful shutdown endpoint for `container.lifecycle.preStop.httpGet` hooks
+
+The graceful shutdown endpoint, `GET`/`POST /shutdown`, is served by a separate listener bound to `api.shutdown_address` (default `127.0.0.1:8081`). The agent refuses to start if that address is not loopback, so only containers in the same pod can drain ProxySQL. Call it from an `exec` preStop hook in the ProxySQL container, which shares the pod's network namespace, for example:
+
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["wget", "-q", "-O", "/dev/null", "--tries=1", "-T", "90", "http://127.0.0.1:8081/shutdown"]
+```
+
+A kubelet `httpGet` preStop hook cannot reach the endpoint, because it connects to the pod IP from the node.
 
 All health endpoints return JSON responses with detailed status information including backend server states, connection counts, and draining status.
 
