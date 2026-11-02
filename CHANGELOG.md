@@ -4,6 +4,10 @@ See the [releases](https://github.com/persona-id/proxysql-agent/releases) page f
 
 ## Unreleased
 
+## 1.2.4 - 11/02/2026
+
+- `/shutdown` is served only on `api.shutdown_address` (default `127.0.0.1:8081`). The health listener stays on `api.port` for kubelet probes. The agent refuses a non-loopback shutdown address. The preStop hook has to be an in-pod exec, for example `wget` against `127.0.0.1:8081`, because a kubelet `httpGet` connects to the pod IP from the node (VLN-4882).
+
 - Go 1.27. The `modernize` linter's `embedlit` rule only fires at this language version, so core tests now set promoted `ObjectMeta` fields directly in `v1.Pod` literals. golangci-lint is v2.15.0. v2.13.2 was built with Go 1.27.0 and cannot decode the export data Go 1.27.2 and later write, so typecheck fails once `setup-go` `stable` moves past 1.27.0. v2.13.0 renamed `exhaustruct` to `exhaustruct_v5`, which `default: all` re-enabled until it was disabled under the new name alongside the existing `wsl`/`wsl_v5` pair.
 
 - The initial ProxySQL admin connection now retries for up to `proxysql.connect_timeout` seconds (default 60) instead of failing on the first refused ping. As a native sidecar the agent starts before ProxySQL and the kubelet holds ProxySQL until the agent container is running, so the opening attempts are refused on every pod start — the agent panicked and was restarted once per pod, on every pod. Set the timeout to 0 for the previous single-attempt behavior. An unreachable ProxySQL now exits non-zero with a plain error rather than dumping a goroutine stack.
