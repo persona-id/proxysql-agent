@@ -283,9 +283,9 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 
 // pauseProxySQL stops the MySQL frontend listener and closes idle client
 // connections (PROXYSQL PAUSE sets mysql-wait_timeout=0). Sticky pooled
-// connections would otherwise stay open until PROXYSQL SHUTDOWN severs them
-// mid-flight (Trilogy::EOFError). Pausing lets clients reconnect through the
-// Service to a healthy satellite while this pod drains.
+// connections would otherwise stay open until ProxySQL's own shutdown severs
+// them mid-flight (Trilogy::EOFError). Pausing lets clients reconnect through
+// the Service to a healthy satellite while this pod drains.
 func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	if p.conn == nil {
 		return
@@ -359,22 +359,15 @@ shutdown_proxysql:
 	// Step 2: Enter stopping phase
 	p.setShutdownPhase(PhaseStopping)
 
-	// Step 3: Stop ProxySQL after connections have drained
+	// Step 3: Close the admin connection. The kubelet SIGTERMs the proxysql container
+	// directly once this handler returns, and ProxySQL's own signal handler stops it from
+	// there. Issuing PROXYSQL SHUTDOWN here instead would kill proxysql while the preStop
+	// exec hook (wget, running inside that same container) is still waiting on this HTTP
+	// response, turning a successful drain into a FailedPreStopHook.
 	if p.conn != nil {
-		slog.Info("shutting down ProxySQL")
-
-		_, err := p.conn.ExecContext(context.Background(), "PROXYSQL SHUTDOWN") //nolint:contextcheck
-		if err != nil {
-			slog.Error("failed to shutdown ProxySQL", slog.Any("error", err))
-			// Continue with cleanup even if ProxySQL shutdown fails
-		} else {
-			slog.Info("ProxySQL shutdown command completed")
-		}
-
-		// Step 4: Close database connection
 		slog.Info("closing database connection")
 
-		err = p.conn.Close()
+		err := p.conn.Close()
 		if err != nil {
 			slog.Error("failed to close database connection", slog.Any("error", err))
 		} else {
@@ -382,7 +375,7 @@ shutdown_proxysql:
 		}
 	}
 
-	// Step 5: Mark as fully stopped
+	// Step 4: Mark as fully stopped
 	p.setShutdownPhase(PhaseStopped)
 	slog.Info("graceful shutdown completed successfully")
 

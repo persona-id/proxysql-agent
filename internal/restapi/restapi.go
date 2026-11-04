@@ -40,7 +40,7 @@ func newServer(addr string, handler http.Handler, settings *configuration.Config
 	// WriteTimeout must exceed ShutdownTimeout because the preStop handler
 	// blocks for the full graceful shutdown duration before returning a response.
 	// The extra headroom covers work outside the shutdown context timeout:
-	// startDraining(), PROXYSQL SHUTDOWN, and conn.Close().
+	// startDraining() and conn.Close().
 	const shutdownHeadroom = 15
 	writeTimeout := time.Duration(settings.Shutdown.ShutdownTimeout+shutdownHeadroom) * time.Second
 

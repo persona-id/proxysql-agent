@@ -4,6 +4,8 @@ See the [releases](https://github.com/persona-id/proxysql-agent/releases) page f
 
 ## Unreleased
 
+- Satellite graceful shutdown no longer issues `PROXYSQL SHUTDOWN` from the preStop handler. That command exits the proxysql process while `wget` (the exec preStop, running in that container) is still waiting on the `/shutdown` response, so the kubelet records `FailedPreStopHook` after a drain that otherwise succeeded. The handler still pauses and waits out the drain, then returns; the kubelet SIGTERMs proxysql once the hook exits, and ProxySQL's own signal handler stops the process.
+
 - Go 1.27. The `modernize` linter's `embedlit` rule only fires at this language version, so core tests now set promoted `ObjectMeta` fields directly in `v1.Pod` literals. golangci-lint is v2.15.0. v2.13.2 was built with Go 1.27.0 and cannot decode the export data Go 1.27.2 and later write, so typecheck fails once `setup-go` `stable` moves past 1.27.0. v2.13.0 renamed `exhaustruct` to `exhaustruct_v5`, which `default: all` re-enabled until it was disabled under the new name alongside the existing `wsl`/`wsl_v5` pair.
 
 - The initial ProxySQL admin connection now retries for up to `proxysql.connect_timeout` seconds (default 60) instead of failing on the first refused ping. As a native sidecar the agent starts before ProxySQL and the kubelet holds ProxySQL until the agent container is running, so the opening attempts are refused on every pod start — the agent panicked and was restarted once per pod, on every pod. Set the timeout to 0 for the previous single-attempt behavior. An unreachable ProxySQL now exits non-zero with a plain error rather than dumping a goroutine stack.
