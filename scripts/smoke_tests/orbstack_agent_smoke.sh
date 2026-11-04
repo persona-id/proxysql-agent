@@ -16,7 +16,9 @@
 #     assert every core+satellite carries the new marker and none revert to
 #     the old one. This is the production "had to kill all core pods" bug.
 #   - satellite graceful drain: preStop → PROXYSQL PAUSE, new connects to the
-#     paused pod are refused, service traffic survives via remaining peers
+#     paused pod are refused, service traffic survives via remaining peers,
+#     and the exec preStop itself succeeds (no FailedPreStopHook; the agent
+#     logs graceful shutdown completed while the pod is still present)
 #
 # Usage (from repo root):
 #   ./scripts/smoke_tests/orbstack_agent_smoke.sh
@@ -705,7 +707,56 @@ assert_graceful_drain() {
   [[ "${result}" == "1" ]] || die "service traffic failed during satellite drain: expected 1, got '${result}'"
   pass "service traffic survived satellite graceful drain"
 
+  assert_prestop_hook_succeeds "${victim}"
+
   kubectl -n proxysql rollout status deployment/proxysql-satellite --timeout="${SMOKE_TIMEOUT_SECONDS}s"
+}
+
+# The drain above can succeed while the preStop process itself is killed.
+# PROXYSQL SHUTDOWN used to exit pid 1 out from under wget; this asserts the
+# hook is still running when the agent finishes the HTTP response.
+assert_prestop_hook_succeeds() {
+  local victim="$1"
+  step "assert preStop hook completes before the proxysql container is SIGTERM'd"
+  local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+  local logs pod_present
+
+  while true; do
+    if kubectl -n proxysql get events \
+      --field-selector "involvedObject.name=${victim},reason=FailedPreStopHook" \
+      --no-headers 2>/dev/null | grep -q .; then
+      die "preStop hook failed on ${victim} (FailedPreStopHook)"
+    fi
+
+    pod_present=0
+    if kubectl -n proxysql get pod "${victim}" >/dev/null 2>&1; then
+      pod_present=1
+    fi
+
+    logs="$(kubectl -n proxysql logs "${victim}" -c proxysql-agent --tail=400 2>/dev/null || true)"
+
+    if echo "${logs}" | grep -q "failed to shutdown ProxySQL"; then
+      die "agent logged failed to shutdown ProxySQL on ${victim}: $(echo "${logs}" | grep "failed to shutdown ProxySQL" | tail -n1)"
+    fi
+
+    if echo "${logs}" | grep -q "graceful shutdown completed successfully" \
+      && echo "${logs}" | grep -q "HTTP server shutdown completed"; then
+      if [[ "${pod_present}" -eq 1 ]]; then
+        pass "preStop shutdown completed while ${victim} was still present"
+        return 0
+      fi
+      die "agent finished shutdown only after ${victim} was already gone"
+    fi
+
+    if [[ "${pod_present}" -eq 0 ]]; then
+      die "satellite ${victim} exited before the agent logged graceful shutdown completed successfully"
+    fi
+
+    if [[ "${SECONDS}" -ge "${deadline}" ]]; then
+      die "timed out after ${SMOKE_TIMEOUT_SECONDS}s waiting for preStop hook success on ${victim}"
+    fi
+    sleep 1
+  done
 }
 
 main() {

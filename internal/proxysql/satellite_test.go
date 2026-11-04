@@ -158,7 +158,6 @@ func TestGracefulShutdownDoesNotCloseHTTPServer(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("PROXYSQL SHUTDOWN").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectClose()
 
 	// Short shutdown timeout so the drain loop exits quickly via context expiry.
@@ -271,11 +270,12 @@ func TestStartDraining(t *testing.T) {
 }
 
 func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
-	// When the drain context expires (the common case — drain timeout fires before
-	// all clients disconnect), gracefulShutdown must still send "PROXYSQL PAUSE"
-	// then "PROXYSQL SHUTDOWN". PAUSE closes idle pooled connections before
-	// SHUTDOWN tears the process down; both use context.Background so they still
-	// fire when the drain budget has already expired.
+	// When the drain context expires, gracefulShutdown still sends PROXYSQL PAUSE
+	// and closes the admin connection. It does not send PROXYSQL SHUTDOWN: that
+	// command exits pid 1 while the preStop wget, running in the proxysql
+	// container, is waiting on the HTTP response. The kubelet SIGTERMs proxysql
+	// after the hook returns. PAUSE uses a context that survives drain-budget
+	// expiry, so it still runs when the drain context is already done.
 	t.Parallel()
 
 	db, mock, err := sqlmock.New()
@@ -287,7 +287,6 @@ func TestGracefulShutdownCallsProxySQLShutdown(t *testing.T) {
 
 	mock.MatchExpectationsInOrder(true)
 	mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("PROXYSQL SHUTDOWN").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectClose()
 
 	proxy := &ProxySQL{
@@ -327,7 +326,7 @@ func TestPauseProxySQLNoopWithoutConn(t *testing.T) {
 func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
 	// gracefulShutdown must NOT exit early when clients == 0.
 	// With 64 pods, any given pod frequently has zero active queries at T=2s.
-	// Exiting early means PROXYSQL SHUTDOWN fires before kube-proxy removes
+	// Returning early lets the kubelet SIGTERM proxysql before kube-proxy removes
 	// the endpoint (~15-20s), so new connections get RST'd during TCP/SSL handshake.
 	t.Parallel()
 
