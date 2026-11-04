@@ -62,11 +62,12 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 func (p *ProxySQL) GetMissingCorePods(ctx context.Context) (int, error) {
 	count := -1
 
+	// Include hostname proxysql-core: satellites can stay pinned to the
+	// Service DNS name after cores rotate, and that peer is the one that fails.
 	query := `SELECT COUNT(hostname)
 			FROM stats_proxysql_servers_metrics
 			WHERE last_check_ms > 30000
-			AND hostname != 'proxysql-core'
-			AND Uptime_s > 0`
+			AND (hostname = 'proxysql-core' OR Uptime_s > 0)`
 	row := p.conn.QueryRowContext(ctx, query)
 
 	err := row.Scan(&count)

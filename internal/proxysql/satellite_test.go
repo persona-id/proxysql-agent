@@ -26,7 +26,7 @@ func TestGetMissingCorePods(t *testing.T) {
 		{
 			name: "successful query",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND (hostname = 'proxysql-core' OR Uptime_s > 0)")
 				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 			},
 			expectedCount: 1,
@@ -35,7 +35,7 @@ func TestGetMissingCorePods(t *testing.T) {
 		{
 			name: "database error",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+				query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND (hostname = 'proxysql-core' OR Uptime_s > 0)")
 				mock.ExpectQuery(query).WillReturnError(ErrDatabase)
 			},
 			expectedCount: -1,
@@ -118,7 +118,7 @@ func TestSatelliteResync(t *testing.T) {
 		shutdownPhase: PhaseRunning,
 	}
 
-	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND hostname != 'proxysql-core' AND Uptime_s > 0")
+	query := regexp.QuoteMeta("SELECT COUNT(hostname) FROM stats_proxysql_servers_metrics WHERE last_check_ms > 30000 AND (hostname = 'proxysql-core' OR Uptime_s > 0)")
 	mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	commands := []string{
