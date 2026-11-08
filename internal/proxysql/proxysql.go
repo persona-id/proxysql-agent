@@ -241,34 +241,6 @@ func (p *ProxySQL) ProbeClients(ctx context.Context) (int /* clients connected *
 	return 0, nil
 }
 
-// probeConnectedClients returns the live number of connected frontend client
-// connections. Unlike ProbeClients, which reads the stats_history
-// mysql_connections table (sampled only every admin-stats_mysql_connections
-// seconds, 60 by default), stats_mysql_global is refreshed by ProxySQL on every
-// query against it, so the value is current enough to make a drain decision.
-// Variable_Value is a VARCHAR column, so the value is parsed here.
-func (p *ProxySQL) probeConnectedClients(ctx context.Context) (int, error) {
-	if p.conn == nil {
-		return 0, nil
-	}
-
-	var value string
-
-	query := "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name = 'Client_Connections_connected'"
-
-	err := p.conn.QueryRowContext(ctx, query).Scan(&value)
-	if err != nil {
-		return -1, fmt.Errorf("failed to query connected clients: %w", err)
-	}
-
-	clients, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil {
-		return -1, fmt.Errorf("failed to parse connected clients %q: %w", value, err)
-	}
-
-	return clients, nil
-}
-
 // IsShuttingDown returns true if the ProxySQL instance is in shutdown process.
 func (p *ProxySQL) IsShuttingDown() bool {
 	p.shutdownMu.RLock()
@@ -388,4 +360,32 @@ func (p *ProxySQL) probeBackends(ctx context.Context) (int /* backends total */,
 	}
 
 	return total, int(online.Int64), int(shunned.Int64), nil
+}
+
+// probeConnectedClients returns the live number of connected frontend client
+// connections. Unlike ProbeClients, which reads the stats_history
+// mysql_connections table (sampled only every admin-stats_mysql_connections
+// seconds, 60 by default), stats_mysql_global is refreshed by ProxySQL on every
+// query against it, so the value is current enough to make a drain decision.
+// Variable_Value is a VARCHAR column, so the value is parsed here.
+func (p *ProxySQL) probeConnectedClients(ctx context.Context) (int, error) {
+	if p.conn == nil {
+		return 0, nil
+	}
+
+	var value string
+
+	query := "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name = 'Client_Connections_connected'"
+
+	err := p.conn.QueryRowContext(ctx, query).Scan(&value)
+	if err != nil {
+		return -1, fmt.Errorf("failed to query connected clients: %w", err)
+	}
+
+	clients, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return -1, fmt.Errorf("failed to parse connected clients %q: %w", value, err)
+	}
+
+	return clients, nil
 }

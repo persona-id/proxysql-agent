@@ -323,7 +323,7 @@ func TestPauseProxySQLNoopWithoutConn(t *testing.T) {
 	proxy.pauseProxySQL(context.Background()) // must not panic
 }
 
-var connectedClientsQuery = regexp.QuoteMeta("SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name = 'Client_Connections_connected'")
+const connectedClientsSQL = "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name = 'Client_Connections_connected'"
 
 // probeReading is one scripted response to the live connected-clients probe.
 type probeReading struct {
@@ -413,7 +413,7 @@ func TestGracefulShutdownDrain(t *testing.T) {
 			mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
 
 			for _, reading := range tt.readings {
-				expectation := mock.ExpectQuery(connectedClientsQuery)
+				expectation := mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL))
 				if reading.err != nil {
 					expectation.WillReturnError(reading.err)
 				} else {
@@ -507,7 +507,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "parses string value",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("42"))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("42"))
 			},
 			want:    42,
 			wantErr: false,
@@ -515,7 +515,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "zero",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("0"))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("0"))
 			},
 			want:    0,
 			wantErr: false,
@@ -523,7 +523,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "trims whitespace",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(" 7 "))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(" 7 "))
 			},
 			want:    7,
 			wantErr: false,
@@ -531,7 +531,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "integer value",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(int64(5)))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(int64(5)))
 			},
 			want:    5,
 			wantErr: false,
@@ -539,7 +539,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "unparseable value",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("abc"))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("abc"))
 			},
 			want:    -1,
 			wantErr: true,
@@ -547,7 +547,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "no row",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}))
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}))
 			},
 			want:    -1,
 			wantErr: true,
@@ -555,7 +555,7 @@ func TestProbeConnectedClients(t *testing.T) {
 		{
 			name: "query error",
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(connectedClientsQuery).WillReturnError(ErrDatabase)
+				mock.ExpectQuery(regexp.QuoteMeta(connectedClientsSQL)).WillReturnError(ErrDatabase)
 			},
 			want:    -1,
 			wantErr: true,
