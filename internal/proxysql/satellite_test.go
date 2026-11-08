@@ -323,19 +323,161 @@ func TestPauseProxySQLNoopWithoutConn(t *testing.T) {
 	proxy.pauseProxySQL(context.Background()) // must not panic
 }
 
-func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
-	// gracefulShutdown must NOT exit early when clients == 0.
-	// With 64 pods, any given pod frequently has zero active queries at T=2s.
-	// Returning early lets the kubelet SIGTERM proxysql before kube-proxy removes
-	// the endpoint (~15-20s), so new connections get RST'd during TCP/SSL handshake.
+var connectedClientsQuery = regexp.QuoteMeta("SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name = 'Client_Connections_connected'")
+
+// probeReading is one scripted response to the live connected-clients probe.
+type probeReading struct {
+	value string
+	err   error
+}
+
+func TestGracefulShutdownDrain(t *testing.T) {
+	// gracefulShutdown returns as soon as the live connected-client count reads
+	// zero on two consecutive ticks, and otherwise waits out drain_timeout.
+	//
+	// This replaces an earlier test that asserted the drain never exited early,
+	// on the grounds that returning early let the kubelet SIGTERM proxysql before
+	// kube-proxy removed the endpoint (~15-20s), so new connections got RST'd.
+	// That predates PROXYSQL PAUSE (1.2.3): PAUSE now stops the frontend listener
+	// at the start of the drain, so a connect arriving during endpoint
+	// propagation is refused whether proxysql is still running or not. An early
+	// exit therefore adds no new RSTs; it only stops the pod idling once every
+	// client has gone.
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		readings        []probeReading
+		drainTimeout    int
+		shutdownTimeout int
+		tickInterval    time.Duration
+		wantFullWait    bool
+	}{
+		{
+			name:            "exits early once clients drain",
+			readings:        []probeReading{{value: "3"}, {value: "0"}, {value: "0"}},
+			drainTimeout:    10,
+			shutdownTimeout: 15,
+			tickInterval:    20 * time.Millisecond,
+			wantFullWait:    false,
+		},
+		{
+			name:            "single zero reading does not exit",
+			readings:        []probeReading{{value: "0"}, {value: "2"}, {value: "0"}, {value: "0"}},
+			drainTimeout:    10,
+			shutdownTimeout: 15,
+			tickInterval:    20 * time.Millisecond,
+			wantFullWait:    false,
+		},
+		{
+			name: "probe errors never exit and reset the debounce",
+			readings: []probeReading{
+				{err: errSQLTest},
+				{value: "0"},
+				{err: errSQLTest},
+				{value: "not-a-number"},
+				{value: "0"},
+				{value: "0"},
+			},
+			drainTimeout:    10,
+			shutdownTimeout: 15,
+			tickInterval:    20 * time.Millisecond,
+			wantFullWait:    false,
+		},
+		{
+			// Ticks at ~400ms and ~800ms probe; the ~1.2s tick hits drain_timeout.
+			name:            "waits for drain timeout when clients never drain",
+			readings:        []probeReading{{value: "3"}, {value: "1"}},
+			drainTimeout:    1,
+			shutdownTimeout: 5,
+			tickInterval:    400 * time.Millisecond,
+			wantFullWait:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create mock DB: %v", err)
+			}
+
+			defer db.Close()
+
+			// In-order matching: if the drain exits before the script is consumed,
+			// Close arrives ahead of the remaining probe expectations and they are
+			// reported unmet.
+			mock.MatchExpectationsInOrder(true)
+			mock.ExpectExec("PROXYSQL PAUSE").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			for _, reading := range tt.readings {
+				expectation := mock.ExpectQuery(connectedClientsQuery)
+				if reading.err != nil {
+					expectation.WillReturnError(reading.err)
+				} else {
+					expectation.WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(reading.value))
+				}
+			}
+
+			mock.ExpectClose()
+
+			cfg := newTestConfig()
+			cfg.Shutdown.DrainTimeout = tt.drainTimeout
+			cfg.Shutdown.ShutdownTimeout = tt.shutdownTimeout
+
+			proxy := &ProxySQL{
+				conn:              db,
+				settings:          cfg,
+				shutdownPhase:     PhaseDraining,
+				shutdownMu:        sync.RWMutex{},
+				drainTickInterval: tt.tickInterval,
+			}
+
+			start := time.Now()
+
+			if err := proxy.gracefulShutdown(context.Background()); err != nil {
+				t.Errorf("gracefulShutdown() unexpected error: %v", err)
+			}
+
+			elapsed := time.Since(start)
+			drainTime := time.Duration(tt.drainTimeout) * time.Second
+
+			if tt.wantFullWait && elapsed < drainTime {
+				t.Errorf("gracefulShutdown() exited before drain timeout: elapsed=%v, want >= %v", elapsed, drainTime)
+			}
+
+			if !tt.wantFullWait && elapsed >= drainTime {
+				t.Errorf("gracefulShutdown() did not exit early: elapsed=%v, drain timeout %v", elapsed, drainTime)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations not met: %v", err)
+			}
+
+			proxy.shutdownMu.RLock()
+			phase := proxy.shutdownPhase
+			proxy.shutdownMu.RUnlock()
+
+			if phase != PhaseStopped {
+				t.Errorf("shutdownPhase = %v, want PhaseStopped", phase)
+			}
+		})
+	}
+}
+
+func TestGracefulShutdownWithoutConnReturnsImmediately(t *testing.T) {
+	// With no admin connection there is nothing to drain, so the drain returns
+	// without waiting for drain_timeout.
 	t.Parallel()
 
 	cfg := newTestConfig()
-	cfg.Shutdown.DrainTimeout = 1 // 1 second minimum drain time
-	cfg.Shutdown.ShutdownTimeout = 5
+	cfg.Shutdown.DrainTimeout = 5
+	cfg.Shutdown.ShutdownTimeout = 10
 
 	proxy := &ProxySQL{
-		conn:              nil, // ProbeClients returns 0 with nil conn — simulates zero active clients
+		conn:              nil,
 		settings:          cfg,
 		shutdownPhase:     PhaseDraining,
 		shutdownMu:        sync.RWMutex{},
@@ -348,11 +490,127 @@ func TestGracefulShutdownWaitsForDrainTimeout(t *testing.T) {
 		t.Errorf("gracefulShutdown() unexpected error: %v", err)
 	}
 
-	elapsed := time.Since(start)
-	drainTime := time.Duration(cfg.Shutdown.DrainTimeout) * time.Second
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Errorf("gracefulShutdown() with nil conn took %v, want immediate return", elapsed)
+	}
+}
 
-	if elapsed < drainTime {
-		t.Errorf("gracefulShutdown exited before drainTime: elapsed=%v, want >= %v (early clients==0 exit still present)", elapsed, drainTime)
+func TestProbeConnectedClients(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		setupMock func(mock sqlmock.Sqlmock)
+		want      int
+		wantErr   bool
+	}{
+		{
+			name: "parses string value",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("42"))
+			},
+			want:    42,
+			wantErr: false,
+		},
+		{
+			name: "zero",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("0"))
+			},
+			want:    0,
+			wantErr: false,
+		},
+		{
+			name: "trims whitespace",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(" 7 "))
+			},
+			want:    7,
+			wantErr: false,
+		},
+		{
+			name: "integer value",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow(int64(5)))
+			},
+			want:    5,
+			wantErr: false,
+		},
+		{
+			name: "unparseable value",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}).AddRow("abc"))
+			},
+			want:    -1,
+			wantErr: true,
+		},
+		{
+			name: "no row",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnRows(sqlmock.NewRows([]string{"Variable_Value"}))
+			},
+			want:    -1,
+			wantErr: true,
+		},
+		{
+			name: "query error",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(connectedClientsQuery).WillReturnError(ErrDatabase)
+			},
+			want:    -1,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create mock DB: %v", err)
+			}
+
+			defer db.Close()
+
+			tt.setupMock(mock)
+
+			proxy := &ProxySQL{
+				conn:          db,
+				settings:      newTestConfig(),
+				shutdownPhase: PhaseRunning,
+				shutdownMu:    sync.RWMutex{},
+			}
+
+			got, err := proxy.probeConnectedClients(context.Background())
+			if (err != nil) != tt.wantErr {
+				t.Errorf("probeConnectedClients() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if got != tt.want {
+				t.Errorf("probeConnectedClients() = %d, want %d", got, tt.want)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations not met: %v", err)
+			}
+		})
+	}
+}
+
+func TestProbeConnectedClientsNilConn(t *testing.T) {
+	t.Parallel()
+
+	proxy := &ProxySQL{
+		conn:          nil,
+		settings:      newTestConfig(),
+		shutdownPhase: PhaseRunning,
+		shutdownMu:    sync.RWMutex{},
+	}
+
+	got, err := proxy.probeConnectedClients(context.Background())
+	if err != nil || got != 0 {
+		t.Errorf("probeConnectedClients() with nil conn = (%d, %v), want (0, nil)", got, err)
 	}
 }
 

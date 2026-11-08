@@ -303,7 +303,18 @@ func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	slog.Info("ProxySQL pause completed")
 }
 
+// drainedChecksRequired is the number of consecutive drain ticks that must read
+// zero connected clients before the drain returns early. One zero reading is
+// not enough: a pool that closes and immediately reconnects, or a reconnect
+// racing the probe, can momentarily read zero.
+const drainedChecksRequired = 2
+
 // gracefulShutdown performs the graceful shutdown logic for satellite mode.
+// It pauses the frontend listener, then waits for client connections to drain:
+// it returns as soon as no client connections remain (zero connected clients on
+// drainedChecksRequired consecutive checks), and otherwise waits at most
+// shutdown.drain_timeout (bounded by shutdown.shutdown_timeout) before closing
+// the admin connection.
 func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	slog.Info("starting graceful shutdown process")
 
@@ -318,44 +329,9 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	// while ensuring PAUSE still fires if the caller's context is already done.
 	p.pauseProxySQL(context.WithoutCancel(shutdownCtx))
 
-	// Step 1: Monitor connection draining
-	slog.Info("monitoring connection drain", slog.Duration("max_wait", drainTime))
+	// Step 1: Wait for client connections to drain, up to drainTime.
+	p.waitForDrain(shutdownCtx, drainTime)
 
-	drainStart := time.Now()
-
-	tickInterval := p.drainTickInterval
-	if tickInterval == 0 {
-		tickInterval = 2 * time.Second //nolint:mnd
-	}
-
-	ticker := time.NewTicker(tickInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-shutdownCtx.Done():
-			slog.Warn("shutdown timeout reached during connection drain")
-
-			goto shutdown_proxysql
-		case <-ticker.C:
-			if time.Since(drainStart) >= drainTime {
-				slog.Info("drain timeout reached, proceeding with shutdown")
-
-				goto shutdown_proxysql
-			}
-
-			clients, err := p.ProbeClients(shutdownCtx)
-			if err != nil {
-				slog.Debug("failed to check client connections during drain", slog.Any("error", err))
-
-				continue
-			}
-
-			slog.Debug("monitoring client connections", slog.Int("clients", clients))
-		}
-	}
-
-shutdown_proxysql:
 	// Step 2: Enter stopping phase
 	p.setShutdownPhase(PhaseStopping)
 
@@ -380,4 +356,85 @@ shutdown_proxysql:
 	slog.Info("graceful shutdown completed successfully")
 
 	return nil
+}
+
+// waitForDrain blocks until no client connections remain, drainTime elapses,
+// or ctx is done, whichever comes first.
+//
+// The early exit requires zero *connected* client connections, not zero
+// active (non-idle) sessions. Connected == 0 is the only state in which the
+// SIGTERM that follows this handler cuts nothing. Exiting on zero active
+// sessions would still sever idle-but-open sessions, and a client can send its
+// next query on one between our check and the SIGTERM: exactly the mid-query
+// cut-off Rails cannot safely retry. PROXYSQL PAUSE already sets
+// mysql-wait_timeout=0, so idle sessions close on their own and connected
+// converges to active; waiting for connected == 0 costs at most a few seconds
+// and removes that race.
+//
+// The early exit is allowed even if PAUSE failed: the live count is still
+// accurate, and zero connected clients means the SIGTERM severs nothing at
+// that moment. Without PAUSE a new client could connect after the check, but
+// the same is true at the end of a full drain_timeout wait, so waiting longer
+// would not protect it.
+func (p *ProxySQL) waitForDrain(ctx context.Context, drainTime time.Duration) {
+	if p.conn == nil {
+		slog.Info("no admin connection, nothing to drain")
+
+		return
+	}
+
+	slog.Info("monitoring connection drain", slog.Duration("max_wait", drainTime))
+
+	drainStart := time.Now()
+
+	tickInterval := p.drainTickInterval
+	if tickInterval == 0 {
+		tickInterval = 2 * time.Second //nolint:mnd
+	}
+
+	ticker := time.NewTicker(tickInterval)
+	defer ticker.Stop()
+
+	zeroReadings := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Warn("shutdown timeout reached during connection drain")
+
+			return
+		case <-ticker.C:
+			if time.Since(drainStart) >= drainTime {
+				slog.Info("drain timeout reached, proceeding with shutdown")
+
+				return
+			}
+
+			clients, err := p.probeConnectedClients(ctx)
+			if err != nil {
+				// A failed probe says nothing about the client count, so it never
+				// counts towards the early exit and restarts the debounce.
+				slog.Debug("failed to check client connections during drain", slog.Any("error", err))
+
+				zeroReadings = 0
+
+				continue
+			}
+
+			slog.Debug("monitoring client connections", slog.Int("clients", clients))
+
+			if clients != 0 {
+				zeroReadings = 0
+
+				continue
+			}
+
+			zeroReadings++
+			if zeroReadings >= drainedChecksRequired {
+				slog.Info("all client connections drained", slog.Duration("elapsed", time.Since(drainStart)))
+
+				return
+			}
+		}
+	}
 }

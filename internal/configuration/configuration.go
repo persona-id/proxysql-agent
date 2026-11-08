@@ -216,8 +216,8 @@ func setupFlags() error {
 	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
 	pflag.String("api.shutdown_address", "127.0.0.1:8081", "loopback host:port for the /shutdown endpoint")
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
-	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL") //nolint:mnd
-	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")           //nolint:mnd
+	pflag.Int("shutdown.drain_timeout", 30, "maximum seconds to wait for client connections to drain; returns early once no clients remain") //nolint:mnd
+	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")                                  //nolint:mnd
 
 	pflag.Bool("show-config", false, "Dump the configuration for debugging")
 
