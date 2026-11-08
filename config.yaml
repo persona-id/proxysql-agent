@@ -73,9 +73,10 @@ api:
 shutdown:
   # Path to the draining status file; defaults to /var/lib/proxysql/draining
   draining_file: "/var/lib/proxysql/draining"
-  # Seconds to wait for client connections to drain before shutting down ProxySQL.
-  # Must exceed kube-proxy endpoint propagation time (~15-25s). 60s gives ample
-  # buffer even on large or loaded clusters. Defaults to 30.
+  # Maximum seconds to wait for client connections to drain before shutting down
+  # ProxySQL. The drain returns early once no client connections remain, so this
+  # is an upper bound that protects long-running queries rather than a fixed
+  # delay. Defaults to 30.
   drain_timeout: 60
   # Seconds before the shutdown process is forcibly abandoned. Must exceed
   # drain_timeout. Defaults to 60.
