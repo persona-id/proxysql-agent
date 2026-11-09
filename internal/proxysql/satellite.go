@@ -376,11 +376,9 @@ func (p *ProxySQL) drainCheckRuleActive(ctx context.Context, ruleID int) bool {
 	return errorMsg.Valid && errorMsg.String == p.settings.Shutdown.DrainCheckErrorMsg
 }
 
-// pauseProxySQL stops the MySQL frontend listener and closes idle client
-// connections (PROXYSQL PAUSE sets mysql-wait_timeout=0). Sticky pooled
-// connections would otherwise stay open until ProxySQL's own shutdown severs
-// them mid-flight (Trilogy::EOFError). Pausing lets clients reconnect through
-// the Service to a healthy satellite while this pod drains.
+// pauseProxySQL stops the MySQL frontend listener so new connections land on a
+// healthy satellite while this pod drains. PROXYSQL PAUSE does not close or time
+// out existing client connections; they stay open until ProxySQL exits.
 func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	if p.conn == nil {
 		return

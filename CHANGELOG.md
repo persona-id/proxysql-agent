@@ -14,7 +14,7 @@ See the [releases](https://github.com/persona-id/proxysql-agent/releases) page f
 
 ## 1.2.3 - 08/14/2026
 
-- Satellite graceful shutdown now issues `PROXYSQL PAUSE` before the drain wait and `PROXYSQL SHUTDOWN`. Readiness 503 alone left sticky Rails pool sockets pinned to the dying pod until shutdown severed them mid-query (`Trilogy::EOFError` / `CLOSED_CONNECTION`). PAUSE stops the frontend listener and sets `mysql-wait_timeout=0` so idle clients close while healthy Service peers take new traffic; plain `SHUTDOWN` follows (no `SLOW`). OrbStack smoke asserts PAUSE runs and service traffic survives satellite drain.
+- Satellite graceful shutdown now issues `PROXYSQL PAUSE` before the drain wait and `PROXYSQL SHUTDOWN`. PAUSE stops the frontend listener so new connections go to healthy Service peers. It does not close or time out existing client connections, so sticky Rails pool sockets still stay on the dying pod until shutdown severs them (`Trilogy::EOFError` / `CLOSED_CONNECTION`); plain `SHUTDOWN` follows (no `SLOW`). OrbStack smoke asserts PAUSE runs and service traffic survives satellite drain.
 
 ## 1.2.2 - 08/13/2026
 
