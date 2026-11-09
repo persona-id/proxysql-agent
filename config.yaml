@@ -71,6 +71,12 @@ api:
 
 # Graceful shutdown configuration
 shutdown:
+  # mysql_query_rules rule_id that answers the clients' drain check query. When draining
+  # starts the agent turns it into an error (and stops this satellite syncing query rules
+  # and admin variables from the cores) so clients stop reusing this pod. 0 disables.
+  # Error returned by the drain check rule while draining.
+  drain_check_error_msg: "proxysql satellite draining"
+  drain_check_rule_id: 0
   # Path to the draining status file; defaults to /var/lib/proxysql/draining
   draining_file: "/var/lib/proxysql/draining"
   # Seconds to wait for client connections to drain before shutting down ProxySQL.

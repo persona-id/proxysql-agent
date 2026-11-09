@@ -327,9 +327,11 @@ func TestFlags(t *testing.T) {
 		"--core.podselector.app=proxysql-green",
 		"--core.podselector.component=notcore",
 		"--satellite.interval=5533",
+		"--shutdown.drain_check_error_msg=going away",
+		"--shutdown.drain_check_rule_id=4",
 		"--shutdown.drain_timeout=45",
-		"--shutdown.shutdown_timeout=80",
 		"--shutdown.draining_file=/tmp/test-draining",
+		"--shutdown.shutdown_timeout=80",
 	}
 
 	// Set up test
@@ -363,9 +365,11 @@ func TestFlags(t *testing.T) {
 		{"Core.PodSelector.App", "proxysql-green", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "notcore", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 5533, config.Satellite.Interval},
+		{"Shutdown.DrainCheckErrorMsg", "going away", config.Shutdown.DrainCheckErrorMsg},
+		{"Shutdown.DrainCheckRuleID", 4, config.Shutdown.DrainCheckRuleID},
+		{"Shutdown.DrainingFile", "/tmp/test-draining", config.Shutdown.DrainingFile},
 		{"Shutdown.DrainTimeout", 45, config.Shutdown.DrainTimeout},
 		{"Shutdown.ShutdownTimeout", 80, config.Shutdown.ShutdownTimeout},
-		{"Shutdown.DrainingFile", "/tmp/test-draining", config.Shutdown.DrainingFile},
 	}
 
 	for _, tt := range tests {
@@ -728,6 +732,14 @@ func TestConfigureAPIDefaults(t *testing.T) {
 	if config.Shutdown.DrainingFile != "/var/lib/proxysql/draining" {
 		t.Errorf("Shutdown.DrainingFile = %v, want /var/lib/proxysql/draining", config.Shutdown.DrainingFile)
 	}
+
+	if config.Shutdown.DrainCheckRuleID != 0 {
+		t.Errorf("Shutdown.DrainCheckRuleID = %v, want 0", config.Shutdown.DrainCheckRuleID)
+	}
+
+	if config.Shutdown.DrainCheckErrorMsg != "proxysql satellite draining" {
+		t.Errorf("Shutdown.DrainCheckErrorMsg = %v, want proxysql satellite draining", config.Shutdown.DrainCheckErrorMsg)
+	}
 }
 
 func TestLogDebugInfo(t *testing.T) {
@@ -778,9 +790,11 @@ func TestLogDebugInfo(t *testing.T) {
 			Port: 8080,
 		},
 		Shutdown: struct {
-			DrainingFile    string `mapstructure:"draining_file"`
-			DrainTimeout    int    `mapstructure:"drain_timeout"`
-			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+			DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+			DrainingFile       string `mapstructure:"draining_file"`
+			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,

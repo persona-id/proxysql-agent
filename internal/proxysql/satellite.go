@@ -2,11 +2,14 @@ package proxysql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -281,6 +284,98 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	return dumpFile, nil
 }
 
+// markDraining makes the client drain check rule answer with an error so clients stop
+// reusing this pod. Satellites pull query rules and admin variables from the cores, so
+// both pulls are switched off first; a core restarting mid-drain would otherwise replace
+// the rule. Best-effort: failures are logged and the shutdown continues.
+func (p *ProxySQL) markDraining(ctx context.Context) {
+	ruleID := p.settings.Shutdown.DrainCheckRuleID
+	if p.conn == nil || ruleID <= 0 {
+		return
+	}
+
+	slog.Info("marking satellite as draining", slog.Int("rule_id", ruleID))
+
+	syncCommands := []string{
+		"SET admin-cluster_admin_variables_diffs_before_sync=0",
+		"SET admin-cluster_mysql_query_rules_diffs_before_sync=0",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+	}
+
+	for _, command := range syncCommands {
+		if _, err := p.conn.ExecContext(ctx, command); err != nil {
+			slog.Error("failed to disable cluster sync", slog.String("command", command), slog.Any("error", err))
+		}
+	}
+
+	// A pull that started before sync was disabled can still land after the first
+	// attempt, so the runtime rule is read back and applied once more if it was replaced.
+	for attempt := range 2 {
+		found, err := p.setDrainCheckRule(ctx, ruleID)
+		if err != nil {
+			slog.Error("failed to update drain check rule", slog.Any("error", err))
+
+			return
+		}
+
+		if !found {
+			slog.Warn("drain check rule not found", slog.Int("rule_id", ruleID))
+
+			return
+		}
+
+		if p.drainCheckRuleActive(ctx, ruleID) {
+			slog.Info("drain check rule active", slog.Int("rule_id", ruleID), slog.Int("attempt", attempt+1))
+
+			return
+		}
+	}
+
+	slog.Error("drain check rule was not active in runtime after retry", slog.Int("rule_id", ruleID))
+}
+
+// setDrainCheckRule swaps the rule's OK reply for the drain error and loads it to
+// runtime. It reports false when no rule has the given id.
+func (p *ProxySQL) setDrainCheckRule(ctx context.Context, ruleID int) (bool, error) {
+	update := fmt.Sprintf( //nolint:gosec
+		"UPDATE mysql_query_rules SET OK_msg=NULL, error_msg='%s' WHERE rule_id=%d",
+		strings.ReplaceAll(p.settings.Shutdown.DrainCheckErrorMsg, "'", "''"),
+		ruleID,
+	)
+
+	result, err := p.conn.ExecContext(ctx, update)
+	if err != nil {
+		return false, fmt.Errorf("failed to update mysql_query_rules: %w", err)
+	}
+
+	if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected == 0 {
+		return false, nil
+	}
+
+	if _, err := p.conn.ExecContext(ctx, "LOAD MYSQL QUERY RULES TO RUNTIME"); err != nil {
+		return false, fmt.Errorf("failed to load mysql query rules to runtime: %w", err)
+	}
+
+	return true, nil
+}
+
+func (p *ProxySQL) drainCheckRuleActive(ctx context.Context, ruleID int) bool {
+	var errorMsg sql.NullString
+
+	query := fmt.Sprintf("SELECT error_msg FROM runtime_mysql_query_rules WHERE rule_id=%d", ruleID)
+
+	err := p.conn.QueryRowContext(ctx, query).Scan(&errorMsg)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("failed to read drain check rule from runtime", slog.Any("error", err))
+		}
+
+		return false
+	}
+
+	return errorMsg.Valid && errorMsg.String == p.settings.Shutdown.DrainCheckErrorMsg
+}
+
 // pauseProxySQL stops the MySQL frontend listener and closes idle client
 // connections (PROXYSQL PAUSE sets mysql-wait_timeout=0). Sticky pooled
 // connections would otherwise stay open until ProxySQL's own shutdown severs
@@ -313,7 +408,11 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	// Step 0: Pause the frontend listener before draining. Best-effort: if
+	// Step 0: Flip the client drain check before pausing so clients that check out a
+	// connection from here on reconnect to a healthy satellite.
+	p.markDraining(context.WithoutCancel(shutdownCtx))
+
+	// Pause the frontend listener before draining. Best-effort: if
 	// PAUSE fails we still drain and shut down. WithoutCancel preserves values
 	// while ensuring PAUSE still fires if the caller's context is already done.
 	p.pauseProxySQL(context.WithoutCancel(shutdownCtx))
