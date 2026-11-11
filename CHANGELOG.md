@@ -4,6 +4,8 @@ See the [releases](https://github.com/persona-id/proxysql-agent/releases) page f
 
 ## Unreleased
 
+- Satellite graceful shutdown can flip a client-facing drain check. With `shutdown.drain_check_rule_id` set, the agent first stops the satellite pulling admin variables and query rules from the cores (`cluster_*_diffs_before_sync=0`), then changes that query rule from an OK reply to the error in `shutdown.drain_check_error_msg` and loads it to runtime, before `PROXYSQL PAUSE`. Clients that run the rule's query at connection checkout see the error and reconnect to a healthy satellite. The rule is read back from `runtime_mysql_query_rules` and applied once more if a pull that started earlier replaced it. Off by default (`0`).
+
 - Satellite graceful shutdown no longer issues `PROXYSQL SHUTDOWN` from the preStop handler. That command exits the proxysql process while `wget` (the exec preStop, running in that container) is still waiting on the `/shutdown` response, so the kubelet records `FailedPreStopHook` after a drain that otherwise succeeded. The handler still pauses and waits out the drain, then returns; the kubelet SIGTERMs proxysql once the hook exits, and ProxySQL's own signal handler stops the process.
 
 - Go 1.27. The `modernize` linter's `embedlit` rule only fires at this language version, so core tests now set promoted `ObjectMeta` fields directly in `v1.Pod` literals. golangci-lint is v2.15.0. v2.13.2 was built with Go 1.27.0 and cannot decode the export data Go 1.27.2 and later write, so typecheck fails once `setup-go` `stable` moves past 1.27.0. v2.13.0 renamed `exhaustruct` to `exhaustruct_v5`, which `default: all` re-enabled until it was disabled under the new name alongside the existing `wsl`/`wsl_v5` pair.

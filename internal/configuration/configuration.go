@@ -61,9 +61,11 @@ type Config struct {
 		ShutdownAddress string `mapstructure:"shutdown_address"`
 	} `mapstructure:"api"`
 	Shutdown struct {
-		DrainingFile    string `mapstructure:"draining_file"`
-		DrainTimeout    int    `mapstructure:"drain_timeout"`
-		ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+		DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+		DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+		DrainingFile       string `mapstructure:"draining_file"`
+		DrainTimeout       int    `mapstructure:"drain_timeout"`
+		ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 	} `mapstructure:"shutdown"`
 }
 
@@ -185,6 +187,8 @@ func setupDefaults() {
 
 	viper.GetViper().SetDefault("api.port", 8080) //nolint:mnd
 	viper.GetViper().SetDefault("api.shutdown_address", "127.0.0.1:8081")
+	viper.GetViper().SetDefault("shutdown.drain_check_error_msg", "proxysql satellite draining")
+	viper.GetViper().SetDefault("shutdown.drain_check_rule_id", 0)
 	viper.GetViper().SetDefault("shutdown.draining_file", "/var/lib/proxysql/draining")
 
 	viper.GetViper().SetDefault("shutdown.drain_timeout", 30)    //nolint:mnd
@@ -215,6 +219,8 @@ func setupFlags() error {
 
 	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
 	pflag.String("api.shutdown_address", "127.0.0.1:8081", "loopback host:port for the /shutdown endpoint")
+	pflag.String("shutdown.drain_check_error_msg", "proxysql satellite draining", "error returned by the drain check query rule once the satellite starts draining")
+	pflag.Int("shutdown.drain_check_rule_id", 0, "mysql_query_rules rule_id that answers the client drain check; the agent turns it into an error when draining starts, 0 disables")
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
 	pflag.Int("shutdown.drain_timeout", 30, "seconds to wait for connections to drain before shutting down ProxySQL") //nolint:mnd
 	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")           //nolint:mnd

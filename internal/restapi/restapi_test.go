@@ -49,9 +49,11 @@ func TestStartAPIServerConfiguration(t *testing.T) {
 					Port: tt.port,
 				},
 				Shutdown: struct {
-					DrainingFile    string `mapstructure:"draining_file"`
-					DrainTimeout    int    `mapstructure:"drain_timeout"`
-					ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+					DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+					DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+					DrainingFile       string `mapstructure:"draining_file"`
+					DrainTimeout       int    `mapstructure:"drain_timeout"`
+					ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 				}{
 					DrainingFile:    "/tmp/draining",
 					DrainTimeout:    30,
@@ -114,9 +116,11 @@ func TestRouteRegistration(t *testing.T) {
 			Port: 0, // Use port 0 to avoid conflicts
 		},
 		Shutdown: struct {
-			DrainingFile    string `mapstructure:"draining_file"`
-			DrainTimeout    int    `mapstructure:"drain_timeout"`
-			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+			DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+			DrainingFile       string `mapstructure:"draining_file"`
+			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,
@@ -198,9 +202,11 @@ func TestStartAPIPortFormatting(t *testing.T) {
 					Port: tc.port,
 				},
 				Shutdown: struct {
-					DrainingFile    string `mapstructure:"draining_file"`
-					DrainTimeout    int    `mapstructure:"drain_timeout"`
-					ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+					DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+					DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+					DrainingFile       string `mapstructure:"draining_file"`
+					DrainTimeout       int    `mapstructure:"drain_timeout"`
+					ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 				}{
 					DrainingFile:    "/tmp/draining",
 					DrainTimeout:    30,
@@ -233,9 +239,11 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 			Port: 0, // Use port 0 to avoid conflicts
 		},
 		Shutdown: struct {
-			DrainingFile    string `mapstructure:"draining_file"`
-			DrainTimeout    int    `mapstructure:"drain_timeout"`
-			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+			DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+			DrainingFile       string `mapstructure:"draining_file"`
+			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,
@@ -284,9 +292,11 @@ func TestStartAPIGoroutineStarted(t *testing.T) {
 			Port: 0, // Use port 0 to let OS choose available port
 		},
 		Shutdown: struct {
-			DrainingFile    string `mapstructure:"draining_file"`
-			DrainTimeout    int    `mapstructure:"drain_timeout"`
-			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+			DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+			DrainingFile       string `mapstructure:"draining_file"`
+			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,
@@ -320,9 +330,11 @@ func TestStartAPIReturnsHTTPServer(t *testing.T) {
 			Port: 0, // Use port 0 to avoid conflicts
 		},
 		Shutdown: struct {
-			DrainingFile    string `mapstructure:"draining_file"`
-			DrainTimeout    int    `mapstructure:"drain_timeout"`
-			ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+			DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+			DrainingFile       string `mapstructure:"draining_file"`
+			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",
 			DrainTimeout:    30,
