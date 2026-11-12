@@ -32,6 +32,8 @@ core:
     component: test-component
 satellite:
   interval: 60
+shutdown:
+  pause_delay: 23
 `)
 
 func TestValidations(t *testing.T) {
@@ -110,6 +112,16 @@ func TestValidations(t *testing.T) {
 			wantErr: ErrNonLoopbackShutdown,
 			args:    []string{"cmd", "--api.shutdown_address=127.0.0.1"},
 		},
+		{
+			name:    "negative shutdown.pause_delay",
+			wantErr: ErrNegativePauseDelay,
+			args:    []string{"cmd", "--shutdown.pause_delay=-1"},
+		},
+		{
+			name:    "positive shutdown.pause_delay",
+			wantErr: nil,
+			args:    []string{"cmd", "--shutdown.pause_delay=20"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -169,6 +181,7 @@ func TestDefaults(t *testing.T) {
 		{"Core.PodSelector.App", "proxysql", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "core", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 10, config.Satellite.Interval},
+		{"Shutdown.PauseDelay", 0, config.Shutdown.PauseDelay},
 	}
 
 	for _, tt := range tests {
@@ -234,6 +247,7 @@ func TestConfigFile(t *testing.T) {
 		{"Core.PodSelector.App", "test-application", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "test-component", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 60, config.Satellite.Interval},
+		{"Shutdown.PauseDelay", 23, config.Shutdown.PauseDelay},
 	}
 
 	for _, tt := range tests {
@@ -261,6 +275,7 @@ func TestEnvironment(t *testing.T) {
 		"AGENT_CORE_PODSELECTOR_APP":       "env-proxysql-blue",
 		"AGENT_CORE_PODSELECTOR_COMPONENT": "env-proxysql-core",
 		"AGENT_SATELLITE_INTERVAL":         "60",
+		"AGENT_SHUTDOWN_PAUSE_DELAY":       "22",
 	}
 
 	// Set each environment variable
@@ -299,6 +314,7 @@ func TestEnvironment(t *testing.T) {
 		{"Core.PodSelector.App", "env-proxysql-blue", config.Core.PodSelector.App},
 		{"Core.PodSelector.Component", "env-proxysql-core", config.Core.PodSelector.Component},
 		{"Satellite.Interval", 60, config.Satellite.Interval},
+		{"Shutdown.PauseDelay", 22, config.Shutdown.PauseDelay},
 	}
 
 	for _, tt := range tests {
@@ -332,6 +348,7 @@ func TestFlags(t *testing.T) {
 		"--shutdown.drain_timeout=45",
 		"--shutdown.draining_file=/tmp/test-draining",
 		"--shutdown.shutdown_timeout=80",
+		"--shutdown.pause_delay=21",
 	}
 
 	// Set up test
@@ -369,6 +386,7 @@ func TestFlags(t *testing.T) {
 		{"Shutdown.DrainCheckRuleID", 4, config.Shutdown.DrainCheckRuleID},
 		{"Shutdown.DrainingFile", "/tmp/test-draining", config.Shutdown.DrainingFile},
 		{"Shutdown.DrainTimeout", 45, config.Shutdown.DrainTimeout},
+		{"Shutdown.PauseDelay", 21, config.Shutdown.PauseDelay},
 		{"Shutdown.ShutdownTimeout", 80, config.Shutdown.ShutdownTimeout},
 	}
 
@@ -794,6 +812,7 @@ func TestLogDebugInfo(t *testing.T) {
 			DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
 			DrainingFile       string `mapstructure:"draining_file"`
 			DrainTimeout       int    `mapstructure:"drain_timeout"`
+			PauseDelay         int    `mapstructure:"pause_delay"`
 			ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 		}{
 			DrainingFile:    "/tmp/draining",

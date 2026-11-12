@@ -83,6 +83,16 @@ shutdown:
   # Must exceed kube-proxy endpoint propagation time (~15-25s). 60s gives ample
   # buffer even on large or loaded clusters. Defaults to 30.
   drain_timeout: 60
+  # Satellite only. Seconds to keep the MySQL frontend listener accepting new connections
+  # after /healthz/ready turns 503 and before PROXYSQL PAUSE (and the drain check rule flip).
+  # The kubelet only marks the endpoint not ready after failureThreshold failed readiness
+  # probes, and kube-proxy / the load balancer follow after that; pausing earlier refuses
+  # new connections still routed to this pod. Size it as
+  #   readinessProbe.periodSeconds * failureThreshold + timeoutSeconds + a few seconds
+  # for kube-proxy / ILB propagation. Ignored in core mode. The delay is spent inside
+  # shutdown_timeout, before drain_timeout starts, so shutdown_timeout should be at least
+  # pause_delay + drain_timeout. 0 pauses immediately (previous behaviour). Defaults to 0.
+  pause_delay: 0
   # Seconds before the shutdown process is forcibly abandoned. Must exceed
-  # drain_timeout. Defaults to 60.
+  # pause_delay + drain_timeout. Defaults to 60.
   shutdown_timeout: 75
