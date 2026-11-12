@@ -398,6 +398,42 @@ func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	slog.Info("ProxySQL pause completed")
 }
 
+// pauseDelay returns how long to keep accepting new client connections after readiness
+// turns 503 and before PROXYSQL PAUSE. Only satellites honour shutdown.pause_delay; cores
+// share gracefulShutdown and keep pausing immediately.
+func (p *ProxySQL) pauseDelay() time.Duration {
+	if p.settings == nil || p.settings.RunMode != "satellite" || p.settings.Shutdown.PauseDelay <= 0 {
+		return 0
+	}
+
+	return time.Duration(p.settings.Shutdown.PauseDelay) * time.Second
+}
+
+// waitBeforePause blocks for pauseDelay, or until ctx is done, whichever is first. Readiness
+// is already 503 at this point, but the kubelet only marks the endpoint not ready after
+// failureThreshold failed probes, and kube-proxy / the load balancer follow after that. Until
+// then the pod still receives new connections, which PROXYSQL PAUSE would refuse.
+func (p *ProxySQL) waitBeforePause(ctx context.Context) {
+	delay := p.pauseDelay()
+	if delay <= 0 {
+		return
+	}
+
+	slog.Info("delaying ProxySQL pause so the readiness change can propagate", slog.Duration("pause_delay", delay))
+
+	start := time.Now()
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		slog.Warn("shutdown timeout reached during pause delay, pausing now", slog.Duration("waited", time.Since(start)))
+	case <-timer.C:
+		slog.Info("pause delay elapsed", slog.Duration("waited", time.Since(start)))
+	}
+}
+
 // gracefulShutdown performs the graceful shutdown logic for satellite mode.
 func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	slog.Info("starting graceful shutdown process")
@@ -408,7 +444,13 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	// Step 0: Flip the client drain check before pausing so clients that check out a
+	// Step 0: On satellites, keep the MySQL listener open for shutdown.pause_delay while
+	// the readiness 503 (set by startDraining) reaches the kubelet, the EndpointSlice,
+	// kube-proxy and the load balancer. Pausing first refuses new connections that are
+	// still being routed here. The delay counts against shutdownTimeout.
+	p.waitBeforePause(shutdownCtx)
+
+	// Flip the client drain check before pausing so clients that check out a
 	// connection from here on reconnect to a healthy satellite.
 	p.markDraining(context.WithoutCancel(shutdownCtx))
 
