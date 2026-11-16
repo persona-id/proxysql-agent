@@ -283,6 +283,8 @@ func (p *ProxySQL) reconcileLoop(ctx context.Context, interval time.Duration) {
 
 	initCancel()
 
+	p.restoreDrainCheckLogged(ctx)
+
 	// Phase 2: Periodic reconciliation.
 	slog.Info("initial reconciliation complete, starting periodic reconciliation",
 		slog.Duration("interval", interval),
@@ -299,6 +301,8 @@ func (p *ProxySQL) reconcileLoop(ctx context.Context, interval time.Duration) {
 			if p.IsShuttingDown() {
 				return
 			}
+
+			p.restoreDrainCheckLogged(ctx)
 
 			if err := p.reconcileCluster(ctx); err != nil {
 				slog.Debug("periodic reconciliation failed", slog.Any("error", err))

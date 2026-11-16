@@ -377,6 +377,7 @@ func expectDisableSync(mock sqlmock.Sqlmock) {
 
 func drainTestConfig(ruleID int) *configuration.Config {
 	cfg := newTestConfig()
+	cfg.RunMode = "satellite"
 	cfg.Shutdown.DrainCheckRuleID = ruleID
 	cfg.Shutdown.DrainCheckErrorMsg = drainErrorMsg
 
@@ -551,6 +552,156 @@ func TestGracefulShutdownMarksDrainingBeforePause(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("SQL expectations not met: %v", err)
+	}
+}
+
+func TestMarkDrainingSkipsCores(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock DB: %v", err)
+	}
+
+	defer db.Close()
+
+	cfg := drainTestConfig(4)
+	cfg.RunMode = "core"
+
+	proxy := &ProxySQL{conn: db, settings: cfg}
+	proxy.markDraining(context.Background())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("SQL expectations not met: %v", err)
+	}
+}
+
+func TestRestoreDrainCheck(t *testing.T) {
+	t.Parallel()
+
+	errorRow := func(value any) *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"error_msg"}).AddRow(value)
+	}
+	diffsRow := func(value string) *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"variable_value"}).AddRow(value)
+	}
+
+	expectDiffs := func(mock sqlmock.Sqlmock, admin, rules string) {
+		mock.ExpectQuery(regexp.QuoteMeta(adminDiffsQuery)).WillReturnRows(diffsRow(admin))
+		mock.ExpectQuery(regexp.QuoteMeta(queryRulesDiffsQuery)).WillReturnRows(diffsRow(rules))
+	}
+
+	expectRuleReload := func(mock sqlmock.Sqlmock) {
+		for _, command := range []string{
+			"LOAD MYSQL QUERY RULES FROM CONFIG",
+			"LOAD MYSQL QUERY RULES TO RUNTIME",
+			"SAVE MYSQL QUERY RULES TO DISK",
+		} {
+			mock.ExpectExec(regexp.QuoteMeta(command)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	expectSyncRestore := func(mock sqlmock.Sqlmock) {
+		for _, command := range []string{
+			"SET admin-cluster_admin_variables_diffs_before_sync=" + clusterSyncEnabled,
+			"SET admin-cluster_mysql_query_rules_diffs_before_sync=" + clusterSyncEnabled,
+			"LOAD ADMIN VARIABLES TO RUNTIME",
+			"SAVE ADMIN VARIABLES TO DISK",
+		} {
+			mock.ExpectExec(regexp.QuoteMeta(command)).WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	tests := []struct {
+		name      string
+		ruleID    int
+		shutting  bool
+		setupMock func(mock sqlmock.Sqlmock)
+		wantErr   bool
+	}{
+		{
+			name:      "disabled when rule id is zero",
+			ruleID:    0,
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+		{
+			name:   "leaves a healthy rule with sync enabled",
+			ruleID: 4,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(nil))
+				expectDiffs(mock, clusterSyncEnabled, clusterSyncEnabled)
+			},
+		},
+		{
+			name:   "reloads the rule from config before turning sync back on",
+			ruleID: 4,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(drainErrorMsg))
+				expectRuleReload(mock)
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(nil))
+				expectDiffs(mock, "0", "0")
+				expectSyncRestore(mock)
+			},
+		},
+		{
+			name:   "turns sync back on when the rule is already healthy",
+			ruleID: 4,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(nil))
+				expectDiffs(mock, clusterSyncEnabled, "0")
+				expectSyncRestore(mock)
+			},
+		},
+		{
+			name:      "does nothing while shutting down",
+			ruleID:    4,
+			shutting:  true,
+			setupMock: func(_ sqlmock.Sqlmock) {},
+		},
+		{
+			name:   "leaves sync off when the config still returns the drain error",
+			ruleID: 4,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(drainErrorMsg))
+				expectRuleReload(mock)
+				mock.ExpectQuery(regexp.QuoteMeta(drainRuleQuery)).WillReturnRows(errorRow(drainErrorMsg))
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create mock DB: %v", err)
+			}
+
+			defer db.Close()
+
+			mock.MatchExpectationsInOrder(true)
+			tt.setupMock(mock)
+
+			proxy := &ProxySQL{conn: db, settings: drainTestConfig(tt.ruleID)}
+			if tt.shutting {
+				proxy.shutdownPhase = PhaseDraining
+			}
+
+			err = proxy.restoreDrainCheck(context.Background())
+			if tt.wantErr && err == nil {
+				t.Error("restoreDrainCheck() expected an error")
+			}
+
+			if !tt.wantErr && err != nil {
+				t.Errorf("restoreDrainCheck() unexpected error: %v", err)
+			}
+
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("SQL expectations not met: %v", err)
+			}
+		})
 	}
 }
 
