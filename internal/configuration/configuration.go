@@ -27,6 +27,7 @@ var (
 	ErrNegativeSatelliteInterval = errors.New("satellite.interval cannot be < 0")
 	ErrMissingPort               = errors.New("missing port in address")
 	ErrNonLoopbackShutdown       = errors.New("api.shutdown_address must be a loopback host:port")
+	ErrNegativePauseDelay        = errors.New("shutdown.pause_delay cannot be < 0")
 )
 
 type Config struct {
@@ -61,9 +62,12 @@ type Config struct {
 		ShutdownAddress string `mapstructure:"shutdown_address"`
 	} `mapstructure:"api"`
 	Shutdown struct {
-		DrainingFile    string `mapstructure:"draining_file"`
-		DrainTimeout    int    `mapstructure:"drain_timeout"`
-		ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+		DrainCheckErrorMsg string `mapstructure:"drain_check_error_msg"`
+		DrainCheckRuleID   int    `mapstructure:"drain_check_rule_id"`
+		DrainingFile       string `mapstructure:"draining_file"`
+		DrainTimeout       int    `mapstructure:"drain_timeout"`
+		PauseDelay         int    `mapstructure:"pause_delay"`
+		ShutdownTimeout    int    `mapstructure:"shutdown_timeout"`
 	} `mapstructure:"shutdown"`
 }
 
@@ -185,10 +189,13 @@ func setupDefaults() {
 
 	viper.GetViper().SetDefault("api.port", 8080) //nolint:mnd
 	viper.GetViper().SetDefault("api.shutdown_address", "127.0.0.1:8081")
+	viper.GetViper().SetDefault("shutdown.drain_check_error_msg", "proxysql satellite draining")
+	viper.GetViper().SetDefault("shutdown.drain_check_rule_id", 0)
 	viper.GetViper().SetDefault("shutdown.draining_file", "/var/lib/proxysql/draining")
 
 	viper.GetViper().SetDefault("shutdown.drain_timeout", 30)    //nolint:mnd
 	viper.GetViper().SetDefault("shutdown.shutdown_timeout", 60) //nolint:mnd
+	viper.GetViper().SetDefault("shutdown.pause_delay", 0)
 }
 
 // setupFlags sets up command line flags.
@@ -215,9 +222,12 @@ func setupFlags() error {
 
 	pflag.Int("api.port", 8080, "port for the HTTP API server") //nolint:mnd
 	pflag.String("api.shutdown_address", "127.0.0.1:8081", "loopback host:port for the /shutdown endpoint")
+	pflag.String("shutdown.drain_check_error_msg", "proxysql satellite draining", "error returned by the drain check query rule once the satellite starts draining")
+	pflag.Int("shutdown.drain_check_rule_id", 0, "mysql_query_rules rule_id that answers the client drain check; the agent turns it into an error when draining starts, 0 disables")
 	pflag.String("shutdown.draining_file", "/var/lib/proxysql/draining", "path to the draining status file")
 	pflag.Int("shutdown.drain_timeout", 30, "maximum seconds to wait for client connections to drain; returns early once no clients remain") //nolint:mnd
 	pflag.Int("shutdown.shutdown_timeout", 60, "seconds before the shutdown process is forcibly abandoned")                                  //nolint:mnd
+	pflag.Int("shutdown.pause_delay", 0, "satellite only: seconds to keep accepting new client connections after readiness turns 503 and before PROXYSQL PAUSE; counts against shutdown_timeout, 0 disables")
 
 	pflag.Bool("show-config", false, "Dump the configuration for debugging")
 
@@ -263,6 +273,24 @@ func validateConfig() error {
 
 	if addr := viper.GetViper().GetString("api.shutdown_address"); !isLoopbackAddress(addr) {
 		return fmt.Errorf("%w: %q", ErrNonLoopbackShutdown, addr)
+	}
+
+	pauseDelay := viper.GetViper().GetInt("shutdown.pause_delay")
+	if pauseDelay < 0 {
+		return ErrNegativePauseDelay
+	}
+
+	// The pause delay runs inside the shutdown_timeout budget, ahead of the drain_timeout
+	// wait. If the two do not fit, the drain after PAUSE is cut short by shutdown_timeout.
+	drainTimeout := viper.GetViper().GetInt("shutdown.drain_timeout")
+	shutdownTimeout := viper.GetViper().GetInt("shutdown.shutdown_timeout")
+
+	if pauseDelay > 0 && pauseDelay+drainTimeout > shutdownTimeout {
+		slog.Warn("shutdown.pause_delay + shutdown.drain_timeout exceeds shutdown.shutdown_timeout; the drain after PROXYSQL PAUSE will be cut short",
+			slog.Int("pause_delay", pauseDelay),
+			slog.Int("drain_timeout", drainTimeout),
+			slog.Int("shutdown_timeout", shutdownTimeout),
+		)
 	}
 
 	return nil
@@ -377,6 +405,9 @@ func logDebugInfo(settings *Config) {
 			slog.Int("api.port", settings.API.Port),
 			slog.String("api.shutdown_address", settings.API.ShutdownAddress),
 			slog.String("shutdown.draining_file", settings.Shutdown.DrainingFile),
+			slog.Int("shutdown.drain_timeout", settings.Shutdown.DrainTimeout),
+			slog.Int("shutdown.pause_delay", settings.Shutdown.PauseDelay),
+			slog.Int("shutdown.shutdown_timeout", settings.Shutdown.ShutdownTimeout),
 		),
 	)
 }

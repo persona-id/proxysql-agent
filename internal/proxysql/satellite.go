@@ -2,11 +2,14 @@ package proxysql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -281,11 +284,101 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	return dumpFile, nil
 }
 
-// pauseProxySQL stops the MySQL frontend listener and closes idle client
-// connections (PROXYSQL PAUSE sets mysql-wait_timeout=0). Sticky pooled
-// connections would otherwise stay open until ProxySQL's own shutdown severs
-// them mid-flight (Trilogy::EOFError). Pausing lets clients reconnect through
-// the Service to a healthy satellite while this pod drains.
+// markDraining makes the client drain check rule answer with an error so clients stop
+// reusing this pod. Satellites pull query rules and admin variables from the cores, so
+// both pulls are switched off first; a core restarting mid-drain would otherwise replace
+// the rule. Best-effort: failures are logged and the shutdown continues.
+func (p *ProxySQL) markDraining(ctx context.Context) {
+	ruleID := p.settings.Shutdown.DrainCheckRuleID
+	if p.conn == nil || ruleID <= 0 {
+		return
+	}
+
+	slog.Info("marking satellite as draining", slog.Int("rule_id", ruleID))
+
+	syncCommands := []string{
+		"SET admin-cluster_admin_variables_diffs_before_sync=0",
+		"SET admin-cluster_mysql_query_rules_diffs_before_sync=0",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+	}
+
+	for _, command := range syncCommands {
+		if _, err := p.conn.ExecContext(ctx, command); err != nil {
+			slog.Error("failed to disable cluster sync", slog.String("command", command), slog.Any("error", err))
+		}
+	}
+
+	// A pull that started before sync was disabled can still land after the first
+	// attempt, so the runtime rule is read back and applied once more if it was replaced.
+	for attempt := range 2 {
+		found, err := p.setDrainCheckRule(ctx, ruleID)
+		if err != nil {
+			slog.Error("failed to update drain check rule", slog.Any("error", err))
+
+			return
+		}
+
+		if !found {
+			slog.Warn("drain check rule not found", slog.Int("rule_id", ruleID))
+
+			return
+		}
+
+		if p.drainCheckRuleActive(ctx, ruleID) {
+			slog.Info("drain check rule active", slog.Int("rule_id", ruleID), slog.Int("attempt", attempt+1))
+
+			return
+		}
+	}
+
+	slog.Error("drain check rule was not active in runtime after retry", slog.Int("rule_id", ruleID))
+}
+
+// setDrainCheckRule swaps the rule's OK reply for the drain error and loads it to
+// runtime. It reports false when no rule has the given id.
+func (p *ProxySQL) setDrainCheckRule(ctx context.Context, ruleID int) (bool, error) {
+	update := fmt.Sprintf( //nolint:gosec
+		"UPDATE mysql_query_rules SET OK_msg=NULL, error_msg='%s' WHERE rule_id=%d",
+		strings.ReplaceAll(p.settings.Shutdown.DrainCheckErrorMsg, "'", "''"),
+		ruleID,
+	)
+
+	result, err := p.conn.ExecContext(ctx, update)
+	if err != nil {
+		return false, fmt.Errorf("failed to update mysql_query_rules: %w", err)
+	}
+
+	if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected == 0 {
+		return false, nil
+	}
+
+	if _, err := p.conn.ExecContext(ctx, "LOAD MYSQL QUERY RULES TO RUNTIME"); err != nil {
+		return false, fmt.Errorf("failed to load mysql query rules to runtime: %w", err)
+	}
+
+	return true, nil
+}
+
+func (p *ProxySQL) drainCheckRuleActive(ctx context.Context, ruleID int) bool {
+	var errorMsg sql.NullString
+
+	query := fmt.Sprintf("SELECT error_msg FROM runtime_mysql_query_rules WHERE rule_id=%d", ruleID)
+
+	err := p.conn.QueryRowContext(ctx, query).Scan(&errorMsg)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("failed to read drain check rule from runtime", slog.Any("error", err))
+		}
+
+		return false
+	}
+
+	return errorMsg.Valid && errorMsg.String == p.settings.Shutdown.DrainCheckErrorMsg
+}
+
+// pauseProxySQL stops the MySQL frontend listener so new connections land on a
+// healthy satellite while this pod drains. PROXYSQL PAUSE does not close or time
+// out existing client connections; they stay open until ProxySQL exits.
 func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	if p.conn == nil {
 		return
@@ -303,6 +396,42 @@ func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 	slog.Info("ProxySQL pause completed")
 }
 
+// pauseDelay returns how long to keep accepting new client connections after readiness
+// turns 503 and before PROXYSQL PAUSE. Only satellites honour shutdown.pause_delay; cores
+// share gracefulShutdown and keep pausing immediately.
+func (p *ProxySQL) pauseDelay() time.Duration {
+	if p.settings == nil || p.settings.RunMode != "satellite" || p.settings.Shutdown.PauseDelay <= 0 {
+		return 0
+	}
+
+	return time.Duration(p.settings.Shutdown.PauseDelay) * time.Second
+}
+
+// waitBeforePause blocks for pauseDelay, or until ctx is done, whichever is first. Readiness
+// is already 503 at this point, but the kubelet only marks the endpoint not ready after
+// failureThreshold failed probes, and kube-proxy / the load balancer follow after that. Until
+// then the pod still receives new connections, which PROXYSQL PAUSE would refuse.
+func (p *ProxySQL) waitBeforePause(ctx context.Context) {
+	delay := p.pauseDelay()
+	if delay <= 0 {
+		return
+	}
+
+	slog.Info("delaying ProxySQL pause so the readiness change can propagate", slog.Duration("pause_delay", delay))
+
+	start := time.Now()
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		slog.Warn("shutdown timeout reached during pause delay, pausing now", slog.Duration("waited", time.Since(start)))
+	case <-timer.C:
+		slog.Info("pause delay elapsed", slog.Duration("waited", time.Since(start)))
+	}
+}
+
 // drainedChecksRequired is the number of consecutive drain ticks that must read
 // zero connected clients before the drain returns early. One zero reading is
 // not enough: a pool that closes and immediately reconnects, or a reconnect
@@ -310,7 +439,8 @@ func (p *ProxySQL) pauseProxySQL(ctx context.Context) {
 const drainedChecksRequired = 2
 
 // gracefulShutdown performs the graceful shutdown logic for satellite mode.
-// It pauses the frontend listener, then waits for client connections to drain:
+// After the optional pause delay and drain check flip, it pauses the frontend
+// listener, then waits for client connections to drain:
 // it returns as soon as no client connections remain (zero connected clients on
 // drainedChecksRequired consecutive checks), and otherwise waits at most
 // shutdown.drain_timeout (bounded by shutdown.shutdown_timeout) before closing
@@ -324,7 +454,17 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	// Step 0: Pause the frontend listener before draining. Best-effort: if
+	// Step 0: On satellites, keep the MySQL listener open for shutdown.pause_delay while
+	// the readiness 503 (set by startDraining) reaches the kubelet, the EndpointSlice,
+	// kube-proxy and the load balancer. Pausing first refuses new connections that are
+	// still being routed here. The delay counts against shutdownTimeout.
+	p.waitBeforePause(shutdownCtx)
+
+	// Flip the client drain check before pausing so clients that check out a
+	// connection from here on reconnect to a healthy satellite.
+	p.markDraining(context.WithoutCancel(shutdownCtx))
+
+	// Pause the frontend listener before draining. Best-effort: if
 	// PAUSE fails we still drain and shut down. WithoutCancel preserves values
 	// while ensuring PAUSE still fires if the caller's context is already done.
 	p.pauseProxySQL(context.WithoutCancel(shutdownCtx))
@@ -366,10 +506,11 @@ func (p *ProxySQL) gracefulShutdown(ctx context.Context) error {
 // SIGTERM that follows this handler cuts nothing. Exiting on zero active
 // sessions would still sever idle-but-open sessions, and a client can send its
 // next query on one between our check and the SIGTERM: exactly the mid-query
-// cut-off Rails cannot safely retry. PROXYSQL PAUSE already sets
-// mysql-wait_timeout=0, so idle sessions close on their own and connected
-// converges to active; waiting for connected == 0 costs at most a few seconds
-// and removes that race.
+// cut-off Rails cannot safely retry. PROXYSQL PAUSE only stops new
+// connections; it does not close idle sessions, so connected reaches zero only
+// once clients close their own sockets (for example after the drain check rule,
+// shutdown.drain_check_rule_id, sends them to another satellite). Until then
+// the drain waits up to drainTime, as it did before the early exit existed.
 //
 // The early exit is allowed even if PAUSE failed: the live count is still
 // accurate, and zero connected clients means the SIGTERM severs nothing at

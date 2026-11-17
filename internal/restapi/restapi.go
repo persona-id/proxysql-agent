@@ -148,7 +148,8 @@ func livenessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) ht
 // Otherwise, it sets the HTTP status to 200 (OK) and returns a JSON response with the status and probe results.
 //
 // Readiness 503 alone is not enough to drain sticky client pools: the MySQL
-// listener still accepts connections until gracefulShutdown runs PROXYSQL PAUSE.
+// listener still accepts connections until gracefulShutdown runs PROXYSQL PAUSE,
+// which on satellites waits shutdown.pause_delay so this 503 can propagate first.
 func readinessHandler(psql *proxysql.ProxySQL, settings *configuration.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

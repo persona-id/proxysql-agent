@@ -68,6 +68,8 @@ lifecycle:
 
 A kubelet `httpGet` preStop hook cannot reach the endpoint, because it connects to the pod IP from the node.
 
+On satellites, `shutdown.pause_delay` (default `0`) keeps the MySQL listener accepting new connections for that many seconds after `/healthz/ready` turns 503 and before `PROXYSQL PAUSE`, so the not-ready state can reach the EndpointSlice, kube-proxy and any load balancer before the listener closes. Size it as `periodSeconds × failureThreshold + timeoutSeconds` of the readiness probe plus a few seconds of propagation. The delay is spent inside `shutdown.shutdown_timeout`, ahead of `shutdown.drain_timeout`, so the preStop handler now blocks for up to `pause_delay + drain_timeout`: keep `shutdown_timeout`, the preStop `wget -T` and `terminationGracePeriodSeconds` above that.
+
 All health endpoints return JSON responses with detailed status information including backend server states, connection counts, and draining status.
 
 ## Signal Handling
