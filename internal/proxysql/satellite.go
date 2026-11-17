@@ -23,6 +23,8 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 
 	slog.Info("satellite mode initialized, looping", slog.Int("interval", interval))
 
+	p.restoreDrainCheckLogged(ctx)
+
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
@@ -54,6 +56,8 @@ func (p *ProxySQL) Satellite(ctx context.Context) error {
 			return shutdownErr
 
 		case <-ticker.C:
+			p.restoreDrainCheckLogged(ctx)
+
 			if err := p.SatelliteResync(ctx); err != nil {
 				slog.Error("satellite resync failed, will retry next interval", slog.Any("error", err))
 			}
@@ -284,13 +288,122 @@ func (p *ProxySQL) dumpQueryDigests(ctx context.Context, tmpdir string) (string,
 	return dumpFile, nil
 }
 
-// markDraining makes the client drain check rule answer with an error so clients stop
-// reusing this pod. Satellites pull query rules and admin variables from the cores, so
-// both pulls are switched off first; a core restarting mid-drain would otherwise replace
-// the rule. Best-effort: failures are logged and the shutdown continues.
+const (
+	adminDiffsQuery = "SELECT variable_value FROM runtime_global_variables " +
+		"WHERE variable_name='admin-cluster_admin_variables_diffs_before_sync'"
+	queryRulesDiffsQuery = "SELECT variable_value FROM runtime_global_variables " +
+		"WHERE variable_name='admin-cluster_mysql_query_rules_diffs_before_sync'"
+	clusterSyncEnabled = "3"
+)
+
+// restoreDrainCheckLogged undoes a drain check copied off a shutting-down core.
+// Peers persist the error rule and diffs_before_sync=0, and the zero counters
+// stop the mounted config from syncing back. The rule is reloaded from that
+// config before sync is turned on, so this pod publishes the healthy rule.
+func (p *ProxySQL) restoreDrainCheckLogged(ctx context.Context) {
+	if err := p.restoreDrainCheck(ctx); err != nil {
+		slog.Error("drain check restore failed", slog.Any("error", err))
+	}
+}
+
+func (p *ProxySQL) restoreDrainCheck(ctx context.Context) error {
+	if p.IsShuttingDown() || p.conn == nil || p.settings.Shutdown.DrainCheckRuleID <= 0 {
+		return nil
+	}
+
+	ruleID := p.settings.Shutdown.DrainCheckRuleID
+	if p.drainCheckRuleActive(ctx, ruleID) {
+		slog.Info("restoring drain check rule from config", slog.Int("rule_id", ruleID))
+
+		commands := []string{
+			"LOAD MYSQL QUERY RULES FROM CONFIG",
+			"LOAD MYSQL QUERY RULES TO RUNTIME",
+			"SAVE MYSQL QUERY RULES TO DISK",
+		}
+
+		if err := p.execUnlessShuttingDown(ctx, commands, "failed to restore drain check rule"); err != nil {
+			return err
+		}
+
+		if p.IsShuttingDown() {
+			return nil
+		}
+
+		if p.drainCheckRuleActive(ctx, ruleID) {
+			return fmt.Errorf("%w: rule %d", ErrDrainCheckStuck, ruleID)
+		}
+	}
+
+	// Shutdown may have started while the rule was reloading. Leave the counters at 0
+	// so this pod's own drain flip is not pulled back to the OK reply.
+	if p.IsShuttingDown() {
+		return nil
+	}
+
+	disabled, err := p.clusterSyncDisabled(ctx)
+	if err != nil || !disabled {
+		return err
+	}
+
+	slog.Info("restoring cluster sync")
+
+	commands := []string{
+		"SET admin-cluster_admin_variables_diffs_before_sync=" + clusterSyncEnabled,
+		"SET admin-cluster_mysql_query_rules_diffs_before_sync=" + clusterSyncEnabled,
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"SAVE ADMIN VARIABLES TO DISK",
+	}
+
+	return p.execUnlessShuttingDown(ctx, commands, "failed to restore cluster sync")
+}
+
+func (p *ProxySQL) execUnlessShuttingDown(ctx context.Context, commands []string, errPrefix string) error {
+	for _, command := range commands {
+		if p.IsShuttingDown() {
+			return nil
+		}
+
+		if _, err := p.conn.ExecContext(ctx, command); err != nil {
+			return fmt.Errorf("%s: %w", errPrefix, err)
+		}
+	}
+
+	return nil
+}
+
+func (p *ProxySQL) clusterSyncDisabled(ctx context.Context) (bool, error) {
+	disabled := false
+
+	for _, query := range []string{adminDiffsQuery, queryRulesDiffsQuery} {
+		var value sql.NullString
+
+		err := p.conn.QueryRowContext(ctx, query).Scan(&value)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+
+		if err != nil {
+			return false, fmt.Errorf("failed to read cluster sync setting: %w", err)
+		}
+
+		if value.Valid && value.String == "0" {
+			disabled = true
+		}
+	}
+
+	return disabled, nil
+}
+
+// markDraining makes this satellite's drain check rule answer with an error so
+// clients reconnect to another pod. It runs only in satellite mode. Cores are in
+// proxysql_servers, and a flip there is pulled by every peer together with
+// diffs_before_sync=0, which then stops the cluster from syncing the healthy rule
+// back. Satellites are not cluster peers, so the flip stays on this pod. Sync is
+// disabled first so a pull already in flight cannot put the OK reply back before
+// shutdown finishes. Best-effort: failures are logged and the shutdown continues.
 func (p *ProxySQL) markDraining(ctx context.Context) {
 	ruleID := p.settings.Shutdown.DrainCheckRuleID
-	if p.conn == nil || ruleID <= 0 {
+	if p.conn == nil || ruleID <= 0 || p.settings.RunMode != "satellite" {
 		return
 	}
 
